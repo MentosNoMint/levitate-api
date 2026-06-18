@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Levitate API — Overview redesign (Mission Control)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   ASSUMPTIONS (Junior pass — shown up front)
+   - Bold new direction: "Mission Control" / instrument panel.
+   - Brand orange #ff661a kept as the SINGLE signature accent.
+   - Surfaces go cool-neutral ink (dark) / cool paper (light) —
+     deliberately NOT the GitHub-dark uniform blue + neon slop.
+   - Signature detail = tabular MONO numerals + per-card sparklines.
+   - Data/copy mirror the real OverviewTab + store seed.
+   These tokens map 1:1 to globals.css variables for porting.
+   ============================================================ */
+
+:root, [data-theme="dark"] {
+  --bg-app:        #0b0d11;
+  --bg-panel:      #13161c;
+  --bg-elev:       #181c23;
+  --bg-subtle:     #10131a;
+  --border:        #232932;
+  --border-strong: #313a46;
+  --primary:       #ff661a;
+  --primary-soft:  rgba(255,102,26,0.12);
+  --primary-line:  rgba(255,102,26,0.55);
+  --text-main:     #e8ecf2;
+  --text-muted:    #98a2b1;
+  --text-dim:      #5d6675;
+  --grid:          rgba(255,255,255,0.045);
+  --ok:            #34d399;
+  --warn:          #fbbf24;
+  --danger:        #f87171;
+  --neutral:       #7b8494;
+  --hairline:      rgba(255,255,255,0.06);
+  --card-shadow:   0 1px 0 0 var(--hairline) inset, 0 12px 28px -18px rgba(0,0,0,0.9);
+}
+
+[data-theme="light"] {
+  --bg-app:        #f5f6f8;
+  --bg-panel:      #ffffff;
+  --bg-elev:       #fafbfc;
+  --bg-subtle:     #f0f2f5;
+  --border:        #e5e8ee;
+  --border-strong: #d3d8e0;
+  --primary:       #ff661a;
+  --primary-soft:  rgba(255,102,26,0.10);
+  --primary-line:  rgba(255,102,26,0.85);
+  --text-main:     #11151b;
+  --text-muted:    #5a6471;
+  --text-dim:      #97a0ac;
+  --grid:          rgba(17,21,27,0.05);
+  --ok:            #059669;
+  --warn:          #d97706;
+  --danger:        #dc2626;
+  --neutral:       #6b7280;
+  --hairline:      rgba(255,255,255,0.9);
+  --card-shadow:   0 1px 0 0 var(--hairline) inset, 0 8px 24px -16px rgba(45,55,72,0.25);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-app);
+  color: var(--text-main);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+}
+
+.mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+.shell { max-width: 1180px; margin: 0 auto; padding: 2rem 2rem 4rem; }
+
+/* ---- top frame ---- */
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; }
+.crumb { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-dim); font-weight: 600; }
+.title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.03em; margin-top: 0.15rem; }
+.toggle {
+  display: inline-flex; gap: 0.25rem; padding: 0.25rem; background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: 0.5rem;
+}
+.toggle button {
+  font: inherit; font-size: 0.75rem; font-weight: 600; cursor: pointer; border: none;
+  padding: 0.3rem 0.7rem; border-radius: 0.3125rem; background: transparent; color: var(--text-muted);
+}
+.toggle button.on { background: var(--primary); color: #fff; }
+
+/* ---- system status strip ---- */
+.statusstrip {
+  display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 0.625rem; padding: 0.7rem 1rem; margin-bottom: 1.25rem;
+  box-shadow: var(--card-shadow);
+}
+.statusstrip .live { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; font-weight: 600; }
+.statusstrip .sep { width: 1px; height: 1.1rem; background: var(--border); }
+.statusstrip .ss-item { font-size: 0.8125rem; color: var(--text-muted); }
+.statusstrip .ss-item b { color: var(--text-main); font-weight: 600; }
+.pulse { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 2.2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,0.5);} 70% { box-shadow: 0 0 0 6px rgba(52,211,153,0);} 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0);} }
+
+/* ---- KPI grid ---- */
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.875rem; margin-bottom: 0.875rem; }
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .kpis { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 0.625rem; padding: 1.1rem 1.15rem 0.9rem;
+  box-shadow: var(--card-shadow); position: relative; overflow: hidden;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.kpi-top { display: flex; align-items: center; justify-content: space-between; }
+.kpi-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
+.kpi-ic { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; color: var(--text-dim); }
+.kpi-ic svg { width: 1rem; height: 1rem; }
+.kpi-value { font-size: 1.9rem; font-weight: 600; letter-spacing: -0.04em; margin: 0.5rem 0 0.1rem; line-height: 1; }
+.kpi-value .u { font-size: 1rem; color: var(--text-muted); font-weight: 500; margin-left: 0.15rem; }
+.kpi-foot { display: flex; align-items: center; gap: 0.45rem; font-size: 0.6875rem; color: var(--text-dim); margin-top: 0.5rem; }
+.delta { display: inline-flex; align-items: center; gap: 0.15rem; font-weight: 600; font-size: 0.6875rem; padding: 0.05rem 0.3rem; border-radius: 0.3rem; }
+.delta.up { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.delta.down { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.delta.flat { color: var(--neutral); background: color-mix(in srgb, var(--neutral) 14%, transparent); }
+.spark { position: absolute; right: 0; bottom: 0; width: 64%; height: 36px; opacity: 0.9; pointer-events: none; }
+
+/* ---- panel (chart / table) ---- */
+.panel {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 0.625rem; box-shadow: var(--card-shadow); overflow: hidden;
+}
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 1.1rem 1.25rem 0.6rem; }
+.panel-head h3 { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.02em; }
+.panel-head p { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; max-width: 32rem; }
+.legend { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-muted); }
+.legend .swatch { width: 0.7rem; height: 0.3rem; border-radius: 1rem; background: var(--primary); }
+.now-pill { font-size: 0.75rem; color: var(--text-muted); }
+.now-pill b { color: var(--primary); font-weight: 600; }
+
+.chart-wrap { padding: 0.4rem 1.25rem 1.1rem; }
+.chart-grid-row { display: grid; grid-template-columns: auto 1fr; gap: 0.6rem; }
+.yaxis { display: flex; flex-direction: column; justify-content: space-between; font-size: 0.6875rem; color: var(--text-dim); padding: 0.2rem 0; text-align: right; }
+.xaxis { display: flex; justify-content: space-between; font-size: 0.6875rem; color: var(--text-dim); margin-top: 0.4rem; padding-left: calc(2.4rem + 0.6rem); }
+
+/* ---- table ---- */
+.section-title { display:flex; align-items:center; justify-content: space-between; margin: 1.5rem 0 0.75rem; }
+.section-title h2 { font-size: 1.0625rem; font-weight: 600; letter-spacing: -0.02em; }
+.section-title .count { font-size: 0.75rem; color: var(--text-muted); }
+table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+thead th {
+  text-align: left; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.07em;
+  font-weight: 600; color: var(--text-dim); padding: 0.7rem 1.25rem; background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+tbody td { padding: 0.8rem 1.25rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--bg-elev); }
+.prov { display: flex; flex-direction: column; gap: 0.15rem; }
+.prov .name { font-weight: 600; color: var(--text-main); }
+.prov .tag { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); font-weight: 600; }
+.pill {
+  display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 600;
+  padding: 0.2rem 0.55rem 0.2rem 0.45rem; border-radius: 1rem; border: 1px solid transparent;
+}
+.pill .dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; }
+.pill.active   { color: var(--ok);      background: color-mix(in srgb, var(--ok) 12%, transparent);      border-color: color-mix(in srgb, var(--ok) 25%, transparent); }
+.pill.active .dot   { background: var(--ok); box-shadow: 0 0 0.4rem var(--ok); }
+.pill.cooldown { color: var(--warn);    background: color-mix(in srgb, var(--warn) 14%, transparent);    border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
+.pill.cooldown .dot { background: var(--warn); }
+.pill.exhausted{ color: var(--neutral); background: color-mix(in srgb, var(--neutral) 14%, transparent); border-color: color-mix(in srgb, var(--neutral) 26%, transparent); }
+.pill.exhausted .dot{ background: var(--neutral); }
+.pill.error    { color: var(--danger);  background: color-mix(in srgb, var(--danger) 12%, transparent);  border-color: color-mix(in srgb, var(--danger) 26%, transparent); }
+.pill.error .dot    { background: var(--danger); box-shadow: 0 0 0.4rem var(--danger); }
+
+.lat { display: flex; align-items: center; gap: 0.6rem; }
+.lat .bar { width: 3.5rem; height: 0.3rem; border-radius: 1rem; background: var(--bg-subtle); overflow: hidden; }
+.lat .bar i { display: block; height: 100%; background: var(--primary); border-radius: 1rem; }
+.muted { color: var(--text-muted); }
+.err-ok { color: var(--text-dim); }
+.err-bad { color: var(--danger); font-weight: 600; }
+.footnote { margin-top: 2rem; font-size: 0.75rem; color: var(--text-dim); text-align: center; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div>
+      <div class="crumb">Levitate Console</div>
+      <div class="title">Overview</div>
+    </div>
+    <div class="toggle">
+      <button id="t-dark" class="on" onclick="setTheme('dark')">Dark</button>
+      <button id="t-light" onclick="setTheme('light')">Light</button>
+    </div>
+  </div>
+
+  <!-- System status strip: gives the mission-control read at a glance -->
+  <div class="statusstrip">
+    <span class="live"><span class="pulse"></span> All systems operational</span>
+    <span class="sep"></span>
+    <span class="ss-item">Pools <b class="mono">5/6</b> active</span>
+    <span class="ss-item">Avg latency <b class="mono">131&thinsp;ms</b></span>
+    <span class="ss-item">Throughput <b class="mono">2.4k</b> tok/s</span>
+    <span class="ss-item">Updated <b class="mono">just now</b></span>
+  </div>
+
+  <!-- KPI cards: label · tabular value · delta chip · micro-sparkline -->
+  <div class="kpis">
+    <div class="card">
+      <div class="kpi-top">
+        <span class="kpi-label">Active Routing Pools</span>
+        <span class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+      </div>
+      <div class="kpi-value mono">5<span class="u">/ 6</span></div>
+      <div class="kpi-foot"><span class="delta up">83%</span> active across all providers</div>
+      <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none"><polyline fill="none" stroke="var(--primary-line)" stroke-width="1.5" points="0,28 17,24 34,26 51,18 68,20 85,12 102,14 120,8"/></svg>
+    </div>
+
+    <div class="card">
+      <div class="kpi-top">
+        <span class="kpi-label">Gateway Success Rate</span>
+        <span class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+      </div>
+      <div class="kpi-value mono">99.98<span class="u">%</span></div>
+      <div class="kpi-foot"><span class="delta up">↑ 0.02%</span> over the last 24 hours</div>
+      <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none"><polyline fill="none" stroke="var(--primary-line)" stroke-width="1.5" points="0,14 17,12 34,16 51,10 68,12 85,9 102,11 120,7"/></svg>
+    </div>
+
+    <div class="card">
+      <div class="kpi-top">
+        <span class="kpi-label">Total Routed Tokens</span>
+        <span class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg></span>
+      </div>
+      <div class="kpi-value mono">48.6<span class="u">M</span></div>
+      <div class="kpi-foot"><span class="delta up">↑ 14.2%</span> month-over-month</div>
+      <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none"><polyline fill="none" stroke="var(--primary-line)" stroke-width="1.5" points="0,30 17,27 34,22 51,23 68,16 85,14 102,9 120,6"/></svg>
+    </div>
+
+    <div class="card">
+      <div class="kpi-top">
+        <span class="kpi-label">Est. Cost Saved (USD)</span>
+        <span class="kpi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 16.6 5.7 21l2.3-7.2-6-4.4h7.6z"/></svg></span>
+      </div>
+      <div class="kpi-value mono"><span class="u" style="margin-left:0">$</span>3,284.50</div>
+      <div class="kpi-foot"><span class="delta up">↑ 18.5%</span> via smart routing</div>
+      <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none"><polyline fill="none" stroke="var(--primary-line)" stroke-width="1.5" points="0,29 17,25 34,26 51,20 68,18 85,15 102,12 120,9"/></svg>
+    </div>
+  </div>
+
+  <!-- Chart panel: real axes + gridlines + current callout -->
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h3>Token Routing Volume Over Time</h3>
+        <p>Realtime volume in Millions of Tokens routed across Antigravity pools.</p>
+      </div>
+      <div style="text-align:right; display:flex; flex-direction:column; gap:0.4rem; align-items:flex-end;">
+        <span class="legend"><span class="swatch"></span> Tokens / M</span>
+        <span class="now-pill">now <b class="mono">48.6M</b></span>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart-grid-row">
+        <div class="yaxis" style="height:200px;width:2.4rem;">
+          <span class="mono">50</span><span class="mono">38</span><span class="mono">25</span><span class="mono">13</span><span class="mono">0</span>
+        </div>
+        <svg viewBox="0 0 640 200" style="width:100%;height:200px;" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g stroke="var(--grid)" stroke-width="1">
+            <line x1="0" y1="2"   x2="640" y2="2"/>
+            <line x1="0" y1="51"  x2="640" y2="51"/>
+            <line x1="0" y1="100" x2="640" y2="100"/>
+            <line x1="0" y1="149" x2="640" y2="149"/>
+            <line x1="0" y1="198" x2="640" y2="198"/>
+          </g>
+          <polygon points="0,198 0,150 91,138 183,120 274,96 366,104 457,70 549,58 640,40 640,198" fill="url(#area)"/>
+          <polyline points="0,150 91,138 183,120 274,96 366,104 457,70 549,58 640,40" fill="none" stroke="var(--primary)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
+          <circle cx="640" cy="40" r="4.5" fill="var(--bg-panel)" stroke="var(--primary)" stroke-width="2.5"/>
+        </svg>
+      </div>
+      <div class="xaxis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span></div>
+    </div>
+  </div>
+
+  <!-- Provider health -->
+  <div class="section-title">
+    <h2>Provider Health &amp; Status</h2>
+    <span class="count mono">6 pools · 5 active</span>
+  </div>
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Provider Name</th>
+          <th>Status</th>
+          <th>Avg Latency</th>
+          <th>Requests handled</th>
+          <th>Error Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><div class="prov"><span class="name">Antigravity Gemini · Primary</span><span class="tag">Managed · Gemini</span></div></td>
+          <td><span class="pill active"><span class="dot"></span>active</span></td>
+          <td><div class="lat"><span class="mono muted">124&thinsp;ms</span><span class="bar"><i style="width:35%"></i></span></div></td>
+          <td class="mono muted">1,284,209</td>
+          <td class="mono err-ok">0.012%</td>
+        </tr>
+        <tr>
+          <td><div class="prov"><span class="name">OpenAI GPT-4o</span><span class="tag">BYO · OpenAI</span></div></td>
+          <td><span class="pill active"><span class="dot"></span>active</span></td>
+          <td><div class="lat"><span class="mono muted">142&thinsp;ms</span><span class="bar"><i style="width:42%"></i></span></div></td>
+          <td class="mono muted">842,551</td>
+          <td class="mono err-ok">0.041%</td>
+        </tr>
+        <tr>
+          <td><div class="prov"><span class="name">Anthropic Claude</span><span class="tag">BYO · Anthropic</span></div></td>
+          <td><span class="pill cooldown"><span class="dot"></span>cooldown</span></td>
+          <td><div class="lat"><span class="mono muted">—</span></div></td>
+          <td class="mono muted">318,004</td>
+          <td class="mono err-ok">0.220%</td>
+        </tr>
+        <tr>
+          <td><div class="prov"><span class="name">Antigravity Gemini · Flash Pool</span><span class="tag">Managed · Gemini</span></div></td>
+          <td><span class="pill active"><span class="dot"></span>active</span></td>
+          <td><div class="lat"><span class="mono muted">118&thinsp;ms</span><span class="bar"><i style="width:30%"></i></span></div></td>
+          <td class="mono muted">2,106,773</td>
+          <td class="mono err-ok">0.008%</td>
+        </tr>
+        <tr>
+          <td><div class="prov"><span class="name">OpenAI Embeddings</span><span class="tag">BYO · OpenAI</span></div></td>
+          <td><span class="pill exhausted"><span class="dot"></span>exhausted</span></td>
+          <td><div class="lat"><span class="mono muted">—</span></div></td>
+          <td class="mono muted">94,820</td>
+          <td class="mono err-ok">0.000%</td>
+        </tr>
+        <tr>
+          <td><div class="prov"><span class="name">Gemini Pro · Backup</span><span class="tag">Managed · Gemini</span></div></td>
+          <td><span class="pill error"><span class="dot"></span>error</span></td>
+          <td><div class="lat"><span class="mono muted">—</span></div></td>
+          <td class="mono muted">12,338</td>
+          <td class="mono err-bad">100.0%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footnote">Mockup · Levitate Overview redesign — "Mission Control" direction. Toggle Dark / Light above.</div>
+</div>
+
+<script>
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('t-dark').classList.toggle('on', t==='dark');
+  document.getElementById('t-light').classList.toggle('on', t==='light');
+}
+</script>
+</body>
+</html>

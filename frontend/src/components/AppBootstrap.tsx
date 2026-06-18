@@ -1,0 +1,103 @@
+"use client";
+
+import React, { useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { useDashboardStore } from "@/store/dashboardStore";
+
+interface AppBootstrapProps {
+  children: React.ReactNode;
+}
+
+export default function AppBootstrap({ children }: AppBootstrapProps) {
+  const {
+    token,
+    user,
+    setToken,
+    fetchConfig,
+    fetchUser,
+    fetchData,
+    setTheme,
+    setLanguage,
+  } = useDashboardStore();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const storedTheme = localStorage.getItem("theme");
+      if (storedTheme === "light" || storedTheme === "dark") {
+        setTheme(storedTheme);
+      } else {
+        setTheme("dark");
+      }
+
+      const storedLang = localStorage.getItem("language");
+      if (storedLang === "en" || storedLang === "ru") {
+        setLanguage(storedLang);
+      }
+    }
+  }, [setTheme, setLanguage]);
+
+  useEffect(() => {
+    const initializeAuth = async () => {
+      let currentToken = null;
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const tokenFromUrl = params.get("auth_token");
+        const googleConnect = params.get("google_connect");
+        
+        if (googleConnect === "success") {
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+        
+        const getCookie = (name: string) => {
+          const value = `; ${document.cookie}`;
+          const parts = value.split(`; ${name}=`);
+          if (parts.length === 2) return parts.pop()?.split(";").shift();
+          return undefined;
+        };
+
+        const cookieToken = getCookie("auth_token");
+        const decodedToken = cookieToken ? decodeURIComponent(cookieToken) : undefined;
+
+        if (tokenFromUrl) {
+          currentToken = tokenFromUrl;
+          setToken(tokenFromUrl);
+          window.history.replaceState(null, "", window.location.pathname);
+        } else if (decodedToken) {
+          currentToken = decodedToken;
+          setToken(decodedToken);
+          localStorage.setItem("auth_token", decodedToken);
+        } else {
+          currentToken = localStorage.getItem("auth_token");
+          if (currentToken) {
+            setToken(currentToken);
+            document.cookie = `auth_token=${currentToken}; path=/; max-age=2592000; SameSite=Lax`;
+          }
+        }
+      }
+
+      await fetchConfig();
+      if (currentToken) {
+        await fetchUser();
+      } else {
+        useDashboardStore.setState({ isAuthLoading: false });
+      }
+    };
+
+    initializeAuth();
+    // Run initialization on mount or when route changes if token is not yet established
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, token, setToken, fetchConfig, fetchUser]);
+
+  useEffect(() => {
+    if (user && token) {
+      fetchData();
+      const interval = setInterval(() => {
+        fetchData();
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [user, token, fetchData]);
+
+  return <>{children}</>;
+}

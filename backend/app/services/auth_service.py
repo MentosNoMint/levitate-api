@@ -1,0 +1,208 @@
+import os
+import json
+import httpx
+from typing import Optional, Dict, Any
+from urllib.parse import quote, parse_qs, unquote
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException, status
+
+from app.db.models import User, Credential
+from app.security.auth import sign_user_token, verify_user_token
+from app.crypto.cipher import encrypt_secret, decrypt_secret
+from app.providers.antigravity import AntigravityProvider
+from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/admin/auth/callback")
+
+ANTIGRAVITY_OAUTH_CLIENT_ID = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
+ANTIGRAVITY_OAUTH_CLIENT_SECRET = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+def get_google_oauth_configured() -> bool:
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+def get_login_url(action: Optional[str] = None, token: Optional[str] = None) -> str:
+    if action == "add_credential" and token:
+        client_id = ANTIGRAVITY_OAUTH_CLIENT_ID
+        scopes = "https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email%20https://www.googleapis.com/auth/userinfo.profile%20https://www.googleapis.com/auth/cclog%20https://www.googleapis.com/auth/experimentsandconfigs"
+        state = quote(f"action=add_credential&token={token}")
+        prompt_params = "&access_type=offline&prompt=consent"
+    else:
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            return "/admin/auth/mock"
+        client_id = GOOGLE_CLIENT_ID
+        scopes = "openid%20email%20profile"
+        state = "oauth_state"
+        prompt_params = ""
+
+    authorization_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        "response_type=code&"
+        f"client_id={client_id}&"
+        f"redirect_uri={quote(GOOGLE_REDIRECT_URI)}&"
+        f"scope={scopes}&"
+        f"state={state}"
+        f"{prompt_params}"
+    )
+    return authorization_url
+
+async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSession) -> str:
+    action = None
+    admin_token = None
+    if state and "action=add_credential" in state:
+        decoded_state = unquote(state)
+        parsed_state = parse_qs(decoded_state)
+        action = parsed_state.get("action", [None])[0]
+        admin_token = parsed_state.get("token", [None])[0]
+
+    if action != "add_credential":
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google OAuth is not configured"
+            )
+
+    client_id = ANTIGRAVITY_OAUTH_CLIENT_ID if action == "add_credential" else GOOGLE_CLIENT_ID
+    client_secret = ANTIGRAVITY_OAUTH_CLIENT_SECRET if action == "add_credential" else GOOGLE_CLIENT_SECRET
+
+    async with httpx.AsyncClient() as client:
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code"
+        }
+        token_resp = await client.post(token_url, data=data)
+        if token_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to retrieve Google token: {token_resp.text}"
+            )
+        
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token")
+        
+        userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        userinfo_resp = await client.get(userinfo_url, headers=headers)
+        if userinfo_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to retrieve Google userinfo"
+            )
+        
+        user_info = userinfo_resp.json()
+        email = user_info.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google OAuth response did not contain email"
+            )
+
+    if action == "add_credential":
+        admin_payload = verify_user_token(admin_token or "")
+        if not admin_payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired admin session token"
+            )
+        
+        admin_user_id = admin_payload.get("user_id")
+        if not admin_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Admin session token does not contain user ID"
+            )
+        import uuid
+        admin_uuid = uuid.UUID(admin_user_id)
+        
+        cred_name = f"Antigravity Gemini ({email})"
+        stmt = select(Credential).where(Credential.name == cred_name, Credential.user_id == admin_uuid)
+        result = await db.execute(stmt)
+        existing_cred = result.scalar_one_or_none()
+
+        if not refresh_token and not existing_cred:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google OAuth did not return a refresh token. Please disconnect the app in your Google Account settings and try again."
+            )
+
+        secret_dict = {
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret
+        }
+
+        if not refresh_token and existing_cred:
+            try:
+                old_secret = decrypt_secret(existing_cred.encrypted_secret)
+                old_secret_dict = json.loads(old_secret)
+                secret_dict["refresh_token"] = old_secret_dict.get("refresh_token")
+            except Exception:
+                pass
+
+        encrypted = encrypt_secret(json.dumps(secret_dict))
+
+        if existing_cred:
+            existing_cred.encrypted_secret = encrypted
+            existing_cred.status = "active"
+            if not existing_cred.models:
+                existing_cred.models = DEFAULT_ANTIGRAVITY_MODELS
+            await db.commit()
+            provider = AntigravityProvider(existing_cred)
+            await provider.fetch_quota()
+        else:
+            new_cred = Credential(
+                user_id=admin_uuid,
+                type="antigravity",
+                name=cred_name,
+                provider="Gemini",
+                encrypted_secret=encrypted,
+                concurrency_limit=20,
+                priority=1,
+                weight=5,
+                status="active",
+                models=DEFAULT_ANTIGRAVITY_MODELS
+            )
+            db.add(new_cred)
+            await db.commit()
+            provider = AntigravityProvider(new_cred)
+            await provider.fetch_quota()
+        
+        return f"{FRONTEND_URL}/?google_connect=success"
+    else:
+        stmt = select(User).where(User.email == email)
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            user = User(email=email, role="admin")
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+        token = sign_user_token(email=user.email, user_id=str(user.id))
+        return f"{FRONTEND_URL}/?auth_token={token}"
+
+async def handle_mock_login(db: AsyncSession) -> str:
+    mock_email = "dev-user@levitate.ai"
+    
+    stmt = select(User).where(User.email == mock_email)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(email=mock_email, role="admin")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    token = sign_user_token(email=user.email, user_id=str(user.id))
+    return f"{FRONTEND_URL}/?auth_token={token}"
