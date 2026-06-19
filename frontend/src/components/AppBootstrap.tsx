@@ -9,16 +9,14 @@ interface AppBootstrapProps {
 }
 
 export default function AppBootstrap({ children }: AppBootstrapProps) {
-  const {
-    token,
-    user,
-    setToken,
-    fetchConfig,
-    fetchUser,
-    fetchData,
-    setTheme,
-    setLanguage,
-  } = useDashboardStore();
+  const token = useDashboardStore((state) => state.token);
+  const user = useDashboardStore((state) => state.user);
+  const setToken = useDashboardStore((state) => state.setToken);
+  const fetchConfig = useDashboardStore((state) => state.fetchConfig);
+  const fetchUser = useDashboardStore((state) => state.fetchUser);
+  const fetchData = useDashboardStore((state) => state.fetchData);
+  const setTheme = useDashboardStore((state) => state.setTheme);
+  const setLanguage = useDashboardStore((state) => state.setLanguage);
   const pathname = usePathname();
 
   useEffect(() => {

@@ -2,6 +2,8 @@ import os
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
+from sqlalchemy.pool import NullPool
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///dev.db")
 
 if DATABASE_URL.startswith("postgresql://"):
@@ -12,8 +14,14 @@ elif DATABASE_URL.startswith("sqlite://") and not DATABASE_URL.startswith("sqlit
 connect_args = {}
 if "sqlite" in DATABASE_URL:
     connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30
 
-engine = create_async_engine(DATABASE_URL, connect_args=connect_args, echo=False)
+engine = create_async_engine(
+    DATABASE_URL, 
+    connect_args=connect_args, 
+    echo=False,
+    poolclass=NullPool if "sqlite" in DATABASE_URL else None
+)
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 if "sqlite" in DATABASE_URL:
@@ -21,6 +29,7 @@ if "sqlite" in DATABASE_URL:
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 
 async def get_db():

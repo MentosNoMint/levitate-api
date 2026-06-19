@@ -16,35 +16,61 @@ class CredentialSelector:
         model_name: str, 
         user_id: uuid.UUID,
         exclude_ids: Optional[List[str]] = None
-    ) -> List[Credential]:
+    ) -> Tuple[List[Credential], str]:
+        print(f"[DEBUG SELECTOR] get_active_credentials: model={model_name} user_id={user_id} exclude={exclude_ids}", flush=True)
         now = datetime.now(timezone.utc)
-        stmt = select(Credential).where(
-            Credential.status == "active",
-            Credential.user_id == user_id
-        )
-        if exclude_ids:
-            uuid_excludes = []
-            for eid in exclude_ids:
-                if isinstance(eid, str):
-                    try:
-                        uuid_excludes.append(uuid.UUID(eid))
-                    except ValueError:
-                        pass
-                else:
-                    uuid_excludes.append(eid)
-            stmt = stmt.where(~Credential.id.in_(uuid_excludes))
+
+        async def find_eligible(m_name: str) -> List[Credential]:
+            stmt = select(Credential).where(
+                Credential.status == "active",
+                Credential.user_id == user_id
+            )
+            if exclude_ids:
+                uuid_excludes = []
+                for eid in exclude_ids:
+                    if isinstance(eid, str):
+                        try:
+                            uuid_excludes.append(uuid.UUID(eid))
+                        except ValueError:
+                            pass
+                    else:
+                        uuid_excludes.append(eid)
+                stmt = stmt.where(~Credential.id.in_(uuid_excludes))
+                
+            result = await db.execute(stmt)
+            all_creds = result.scalars().all()
             
-        result = await db.execute(stmt)
-        all_creds = result.scalars().all()
-        
-        eligible = []
-        for cred in all_creds:
-            if cred.expires_at and cred.expires_at <= now:
-                continue
-            if cred.models:
-                if model_name in cred.models:
+            eligible = []
+            def normalize(n: str) -> str:
+                return n.lower().replace(" ", "-").replace("(", "").replace(")", "").replace("/", "-")
+            norm_model = normalize(m_name)
+            is_embedding = "embedding" in norm_model or norm_model.startswith("text-embedding")
+            for cred in all_creds:
+                if cred.expires_at and cred.expires_at <= now:
+                    continue
+                if cred.type == "antigravity" and is_embedding:
                     eligible.append(cred)
-        return eligible
+                    continue
+                if cred.models:
+                    if any(isinstance(m, str) and normalize(m) == norm_model for m in cred.models) or m_name in cred.models:
+                        eligible.append(cred)
+            return eligible
+
+        eligible = await find_eligible(model_name)
+        if eligible:
+            print(f"[DEBUG SELECTOR] get_active_credentials found direct matches: {[c.name for c in eligible]}", flush=True)
+            return eligible, model_name
+
+        from app.core.constants import map_model_name
+        mapped_name = map_model_name(model_name)
+        if mapped_name != model_name:
+            eligible = await find_eligible(mapped_name)
+            if eligible:
+                print(f"[DEBUG SELECTOR] get_active_credentials found fallback matches for mapped model {mapped_name}: {[c.name for c in eligible]}", flush=True)
+                return eligible, mapped_name
+
+        print(f"[DEBUG SELECTOR] get_active_credentials returning empty list", flush=True)
+        return [], model_name
 
     @staticmethod
     async def check_and_reset_quota(db: AsyncSession, credential: Credential) -> None:
@@ -78,10 +104,10 @@ class CredentialSelector:
         user_id: uuid.UUID,
         estimated_tokens: int = 1000,
         exclude_ids: Optional[List[str]] = None
-    ) -> Optional[Credential]:
-        credentials = await cls.get_active_credentials(db, model_name, user_id, exclude_ids=exclude_ids)
+    ) -> Tuple[Optional[Credential], str]:
+        credentials, matched_model = await cls.get_active_credentials(db, model_name, user_id, exclude_ids=exclude_ids)
         if not credentials:
-            return None
+            return None, model_name
 
         for cred in credentials:
             await cls.check_and_reset_quota(db, cred)
@@ -106,14 +132,19 @@ class CredentialSelector:
                 concurrency_val = int(curr_concurrency) if curr_concurrency else 0
                 tokens_val = int(curr_tokens) if curr_tokens else cred.quota_used_tokens
 
+                print(f"[DEBUG SELECTOR] Candidate={cred.name} curr_concurrency={concurrency_val} limit={cred.concurrency_limit} curr_tokens={tokens_val} total={cred.quota_total_tokens}", flush=True)
+
                 if cred.concurrency_limit is not None and concurrency_val >= cred.concurrency_limit:
+                    print(f"[DEBUG SELECTOR] Skipped {cred.name} due to concurrency limit", flush=True)
                     continue
-                if cred.quota_total_tokens is not None and (tokens_val + estimated_tokens) > cred.quota_total_tokens:
+                if cred.type != "antigravity" and cred.quota_total_tokens is not None and (tokens_val + estimated_tokens) > cred.quota_total_tokens:
+                    print(f"[DEBUG SELECTOR] Skipped {cred.name} due to token quota limit", flush=True)
                     continue
                 
                 candidates.append(cred)
 
             if not candidates:
+                print(f"[DEBUG SELECTOR] No candidates left in priority group {priority}", flush=True)
                 continue
 
             while candidates:
@@ -133,12 +164,13 @@ class CredentialSelector:
                         selected = candidates[-1]
 
                 booked = await cls._try_book(selected, estimated_tokens)
+                print(f"[DEBUG SELECTOR] Attempted booking for {selected.name}: booked={booked}", flush=True)
                 if booked:
-                    return selected
+                    return selected, matched_model
                 else:
                     candidates.remove(selected)
 
-        return None
+        return None, model_name
 
     @staticmethod
     async def _try_book(credential: Credential, estimated_tokens: int) -> bool:
@@ -159,7 +191,7 @@ class CredentialSelector:
 
             if credential.concurrency_limit is not None and concurrency_val >= credential.concurrency_limit:
                 return False
-            if credential.quota_total_tokens is not None and (tokens_val + estimated_tokens) > credential.quota_total_tokens:
+            if credential.quota_total_tokens is not None and credential.type != "antigravity" and (tokens_val + estimated_tokens) > credential.quota_total_tokens:
                 return False
 
             await redis_client.incrby(concurrency_key, 1)

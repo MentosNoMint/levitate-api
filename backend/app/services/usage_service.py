@@ -77,9 +77,9 @@ async def stream_response_generator(
     first_chunk: Any, 
     response_gen: Any, 
     secret_to_scan: str, 
-    vkey: VirtualKey, 
+    vkey: Any, 
     model_name: str, 
-    db: AsyncSession,
+    db: Any,
     start_time: float
 ):
     total_prompt_tokens = 0
@@ -123,36 +123,41 @@ async def stream_response_generator(
         usage_obj = UsageObj(total_prompt_tokens, total_completion_tokens)
         
         async def cleanup():
-            await CredentialSelector.release(str(cred.id), total_tokens, db)
-            if vkey.id and total_tokens > 0:
-                vkey_token_key = get_vkey_tokens_key(vkey.id)
-                await redis_client.incrby(vkey_token_key, total_tokens)
-            
-            status_str = "success"
-            if stream_error is not None:
-                status_str = "failure"
-                err_str = str(stream_error).lower()
-                is_rate_limit = False
-                is_quota = False
+            from app.db.session import AsyncSessionLocal
+            async with AsyncSessionLocal() as local_db:
+                await CredentialSelector.release(str(cred.id), total_tokens, local_db)
+                if vkey.id and total_tokens > 0:
+                    vkey_token_key = get_vkey_tokens_key(vkey.id)
+                    await redis_client.incrby(vkey_token_key, total_tokens)
                 
-                if "rate limit" in err_str or "429" in err_str:
-                    is_rate_limit = True
-                elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                    is_quota = True
+                status_str = "success"
+                if stream_error is not None:
+                    status_str = "failure"
+                    err_str = str(stream_error).lower()
+                    is_rate_limit = False
+                    is_quota = False
                     
-                stmt = select(Credential).where(Credential.id == cred.id)
-                result = await db.execute(stmt)
-                db_cred = result.scalar_one_or_none()
-                if db_cred:
-                    if is_rate_limit:
-                        db_cred.status = "cooldown"
-                        db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-                    elif is_quota:
-                        db_cred.status = "exhausted"
-                    else:
-                        db_cred.status = "degraded"
-                    await db.commit()
-                    
-            await log_usage_event(db, vkey.id, cred.id, model_name, usage_obj, latency_ms, status_str)
+                    if "rate limit" in err_str or "429" in err_str or "too many requests" in err_str or "per minute" in err_str:
+                        is_rate_limit = True
+                    elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
+                        if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
+                            is_quota = True
+                        else:
+                            is_rate_limit = True
+                        
+                    stmt = select(Credential).where(Credential.id == cred.id)
+                    result = await local_db.execute(stmt)
+                    db_cred = result.scalar_one_or_none()
+                    if db_cred:
+                        if is_rate_limit:
+                            db_cred.status = "cooldown"
+                            db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+                        elif is_quota:
+                            db_cred.status = "exhausted"
+                        else:
+                            db_cred.status = "degraded"
+                        await local_db.commit()
+                        
+                await log_usage_event(local_db, vkey.id, cred.id, model_name, usage_obj, latency_ms, status_str)
             
         await asyncio.shield(cleanup())

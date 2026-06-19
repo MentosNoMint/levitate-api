@@ -35,3 +35,25 @@ def get_credential_concurrency_key(credential_id) -> str:
 
 def get_lock_credential_key(credential_id) -> str:
     return REDIS_KEY_LOCK_CREDENTIAL.format(credential_id=credential_id)
+
+def map_model_name(model_name: str) -> str:
+    if not model_name:
+        return model_name
+    m = model_name.lower()
+    if "embedding" in m or m.startswith("text-embedding"):
+        return "text-embedding-3-small"
+    if "sonnet" in m:
+        return "claude-4.6-sonnet"
+    if "opus" in m:
+        return "claude-4.6-opus-thinking"
+    if "pro" in m:
+        return "gemini-3.1-pro-low-high"
+    if "flash" in m:
+        if "extra-low" in m or "extra_low" in m:
+            return "gemini-3.5-flash-extra-low"
+        return "gemini-3.5-flash-low"
+    if "gpt-4" in m or "gpt-4o" in m:
+        return "claude-4.6-sonnet"
+    if "gpt-3" in m:
+        return "gemini-3.5-flash-low"
+    return model_name

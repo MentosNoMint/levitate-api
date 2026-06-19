@@ -77,7 +77,7 @@ async def chat_completions(
     last_exception = None
     
     while True:
-        cred = await CredentialSelector.select_and_book(
+        cred, matched_model = await CredentialSelector.select_and_book(
             db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
         )
         if not cred:
@@ -97,31 +97,42 @@ async def chat_completions(
             await CredentialSelector.release(str(cred.id), 0, db)
             raise HTTPException(status_code=400, detail="Potential secret leak detected in request")
             
+        await db.commit()
+        is_upstream_error = False
         try:
             raw_secret = decrypt_secret(cred.encrypted_secret)
             provider = get_provider(cred)
+            extra_kwargs = {k: v for k, v in payload.items() if k not in ["model", "messages", "stream"]}
             if stream:
+                is_upstream_error = True
                 response = await provider.chat_completion(
-                    model=model_name,
+                    model=matched_model,
                     messages=messages,
-                    stream=True
+                    stream=True,
+                    **extra_kwargs
                 )
                 try:
                     first_chunk = await response.__anext__()
                 except Exception as stream_err:
                     raise stream_err
-                    
+                is_upstream_error = False
+                
+                simple_vkey = type("SimpleVKey", (), {"id": vkey.id})()
+                simple_cred = type("SimpleCred", (), {"id": cred.id})()
                 return StreamingResponse(
                     usage_service.stream_response_generator(
-                        cred, first_chunk, response, raw_secret, vkey, model_name, db, start_time
+                        simple_cred, first_chunk, response, raw_secret, simple_vkey, matched_model, None, start_time
                     ),
                     media_type="text/event-stream"
                 )
             else:
+                is_upstream_error = True
                 response = await provider.chat_completion(
-                    model=model_name,
-                    messages=messages
+                    model=matched_model,
+                    messages=messages,
+                    **extra_kwargs
                 )
+                is_upstream_error = False
                 
                 response_str = str(response)
                 if scan_for_leak({}, response_str, [raw_secret]):
@@ -137,13 +148,25 @@ async def chat_completions(
                     vkey_token_key = get_vkey_tokens_key(vkey.id)
                     await redis_client.incrby(vkey_token_key, tokens_used)
                     
-                await usage_service.log_usage_event(db, vkey.id, cred.id, model_name, usage, latency_ms, "success")
+                await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
                 return response
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            if not is_upstream_error:
+                from app.db.session import AsyncSessionLocal
+                try:
+                    async with AsyncSessionLocal() as local_db:
+                        await CredentialSelector.release(str(cred.id), 0, local_db)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=str(e))
+                
             await CredentialSelector.release(str(cred.id), 0, db)
             latency_ms = int((time.time() - start_time) * 1000)
-            await usage_service.log_usage_event(db, vkey.id, cred.id, model_name, None, latency_ms, "failure")
+            await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
             
             last_exception = e
             
@@ -153,10 +176,13 @@ async def chat_completions(
             
             if hasattr(e, "status_code") and e.status_code == 429:
                 is_rate_limit = True
-            elif "rate limit" in err_str or "429" in err_str:
+            elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
                 is_rate_limit = True
             elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                is_quota = True
+                if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
+                    is_quota = True
+                else:
+                    is_rate_limit = True
                 
             stmt = select(Credential).where(Credential.id == cred.id)
             result = await db.execute(stmt)
@@ -196,7 +222,7 @@ async def embeddings(
     last_exception = None
     
     while True:
-        cred = await CredentialSelector.select_and_book(
+        cred, matched_model = await CredentialSelector.select_and_book(
             db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
         )
         if not cred:
@@ -216,13 +242,17 @@ async def embeddings(
             await CredentialSelector.release(str(cred.id), 0, db)
             raise HTTPException(status_code=400, detail="Potential secret leak detected in request")
             
+        await db.commit()
+        is_upstream_error = False
         try:
             raw_secret = decrypt_secret(cred.encrypted_secret)
             provider = get_provider(cred)
+            is_upstream_error = True
             response = await provider.embedding(
-                model=model_name,
+                model=matched_model,
                 input_data=input_data
             )
+            is_upstream_error = False
             
             response_str = str(response)
             if scan_for_leak({}, response_str, [raw_secret]):
@@ -238,13 +268,25 @@ async def embeddings(
                 vkey_token_key = get_vkey_tokens_key(vkey.id)
                 await redis_client.incrby(vkey_token_key, tokens_used)
                 
-            await usage_service.log_usage_event(db, vkey.id, cred.id, model_name, usage, latency_ms, "success")
+            await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
             return response
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            if not is_upstream_error:
+                from app.db.session import AsyncSessionLocal
+                try:
+                    async with AsyncSessionLocal() as local_db:
+                        await CredentialSelector.release(str(cred.id), 0, local_db)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=str(e))
+                
             await CredentialSelector.release(str(cred.id), 0, db)
             latency_ms = int((time.time() - start_time) * 1000)
-            await usage_service.log_usage_event(db, vkey.id, cred.id, model_name, None, latency_ms, "failure")
+            await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
             
             last_exception = e
             
@@ -254,10 +296,13 @@ async def embeddings(
             
             if hasattr(e, "status_code") and e.status_code == 429:
                 is_rate_limit = True
-            elif "rate limit" in err_str or "429" in err_str:
+            elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
                 is_rate_limit = True
             elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                is_quota = True
+                if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
+                    is_quota = True
+                else:
+                    is_rate_limit = True
                 
             stmt = select(Credential).where(Credential.id == cred.id)
             result = await db.execute(stmt)

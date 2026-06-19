@@ -14,7 +14,8 @@ async def periodic_quota_resets():
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
                 stmt = select(Credential).where(
-                    (Credential.reset_at <= now) | (Credential.status == "cooldown")
+                    ((Credential.reset_at <= now) & (Credential.type != "antigravity")) |
+                    (Credential.status == "cooldown")
                 )
                 result = await db.execute(stmt)
                 credentials = result.scalars().all()
@@ -24,18 +25,22 @@ async def periodic_quota_resets():
                         if cred.reset_at and now < cred.reset_at:
                             continue
                     
-                    cred.quota_used_tokens = 0
-                    cred.status = "active"
-                    
-                    tokens_key = get_credential_tokens_key(cred.id)
-                    concurrency_key = get_credential_concurrency_key(cred.id)
-                    await redis_client.set(tokens_key, "0")
-                    await redis_client.set(concurrency_key, "0")
-
-                    if cred.quota_window:
-                        cred.reset_at = now + timedelta(seconds=cred.quota_window)
-                    else:
+                    if cred.type == "antigravity":
+                        cred.status = "active"
                         cred.reset_at = None
+                    else:
+                        cred.quota_used_tokens = 0
+                        cred.status = "active"
+                        
+                        tokens_key = get_credential_tokens_key(cred.id)
+                        concurrency_key = get_credential_concurrency_key(cred.id)
+                        await redis_client.set(tokens_key, "0")
+                        await redis_client.set(concurrency_key, "0")
+
+                        if cred.quota_window:
+                            cred.reset_at = now + timedelta(seconds=cred.quota_window)
+                        else:
+                            cred.reset_at = None
 
                 await db.commit()
         except Exception:
@@ -68,19 +73,44 @@ async def periodic_health_checks():
             async with AsyncSessionLocal() as db:
                 stmt = select(Credential)
                 result = await db.execute(stmt)
-                credentials = result.scalars().all()
+                creds_data = [
+                    {
+                        "id": cred.id,
+                        "type": cred.type,
+                        "name": cred.name,
+                        "provider": cred.provider,
+                        "encrypted_secret": cred.encrypted_secret,
+                        "base_url": cred.base_url,
+                        "models": cred.models,
+                    }
+                    for cred in result.scalars().all()
+                ]
 
-                for cred in credentials:
-                    now = datetime.now(timezone.utc)
-                    is_healthy = await check_credential_health(cred)
-                    
-                    if is_healthy:
-                        cred.status = "active"
-                    else:
-                        cred.status = "degraded"
-                    cred.last_check_at = now
-                    
-                await db.commit()
+            for cred_data in creds_data:
+                temp_cred = Credential(
+                    id=cred_data["id"],
+                    type=cred_data["type"],
+                    name=cred_data["name"],
+                    provider=cred_data["provider"],
+                    encrypted_secret=cred_data["encrypted_secret"],
+                    base_url=cred_data["base_url"],
+                    models=cred_data["models"]
+                )
+                is_healthy = await check_credential_health(temp_cred)
+                now = datetime.now(timezone.utc)
+                
+                async with AsyncSessionLocal() as db:
+                    stmt = select(Credential).where(Credential.id == temp_cred.id)
+                    res = await db.execute(stmt)
+                    db_cred = res.scalar_one_or_none()
+                    if db_cred:
+                        if is_healthy:
+                            if temp_cred.type != "antigravity":
+                                db_cred.status = "active"
+                        else:
+                            db_cred.status = "degraded"
+                        db_cred.last_check_at = now
+                        await db.commit()
         except Exception:
             pass
         await asyncio.sleep(60)
@@ -91,17 +121,37 @@ async def periodic_token_refreshes():
             async with AsyncSessionLocal() as db:
                 stmt = select(Credential).where(Credential.type == "antigravity")
                 result = await db.execute(stmt)
-                credentials = result.scalars().all()
+                creds_data = [
+                    {
+                        "id": cred.id,
+                        "type": cred.type,
+                        "name": cred.name,
+                        "provider": cred.provider,
+                        "encrypted_secret": cred.encrypted_secret,
+                    }
+                    for cred in result.scalars().all()
+                ]
 
-                for cred in credentials:
-                    provider = AntigravityProvider(cred)
-                    try:
-                        await provider.get_access_token()
-                    except Exception:
-                        cred.status = "cooldown"
-                        cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-                        
-                await db.commit()
+            for cred_data in creds_data:
+                temp_cred = Credential(
+                    id=cred_data["id"],
+                    type=cred_data["type"],
+                    name=cred_data["name"],
+                    provider=cred_data["provider"],
+                    encrypted_secret=cred_data["encrypted_secret"]
+                )
+                provider = AntigravityProvider(temp_cred)
+                try:
+                    await provider.get_access_token()
+                except Exception:
+                    async with AsyncSessionLocal() as db:
+                        stmt = select(Credential).where(Credential.id == temp_cred.id)
+                        res = await db.execute(stmt)
+                        db_cred = res.scalar_one_or_none()
+                        if db_cred:
+                            db_cred.status = "cooldown"
+                            db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+                            await db.commit()
         except Exception:
             pass
         await asyncio.sleep(600)
