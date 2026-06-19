@@ -52,6 +52,38 @@ class AntigravityProvider(BaseProvider):
             return "".join(res)
         return str(content) if content is not None else ""
 
+    def _parse_parts(self, content: Any) -> list:
+        if isinstance(content, str):
+            return [{"text": content}] if content else []
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append({"text": item})
+                elif isinstance(item, dict):
+                    t = item.get("type")
+                    if t == "text":
+                        text = item.get("text", "")
+                        if text:
+                            parts.append({"text": text})
+                    elif t == "image_url":
+                        img_url_obj = item.get("image_url", {})
+                        url = img_url_obj.get("url", "")
+                        if url.startswith("data:"):
+                            try:
+                                header, base64_data = url.split(",", 1)
+                                mime_type = header.split(";")[0].split(":")[1]
+                                parts.append({
+                                    "inlineData": {
+                                        "mimeType": mime_type,
+                                        "data": base64_data
+                                    }
+                                })
+                            except Exception:
+                                pass
+            return parts
+        return []
+
     async def get_access_token(self, force_refresh: bool = False) -> str:
         cache_key = get_credential_access_token_key(self.credential.id)
         if not force_refresh:
@@ -251,9 +283,7 @@ class AntigravityProvider(BaseProvider):
                     continue
                 else:
                     gemini_role = "user"
-                    formatted_text = self._format_content(content)
-                    if formatted_text:
-                        parts.append({"text": formatted_text})
+                    parts = self._parse_parts(content)
                 
                 if parts:
                     contents.append({
