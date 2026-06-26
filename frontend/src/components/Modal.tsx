@@ -42,12 +42,12 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, children }) 
       />
       <div className="bg-[var(--bg-panel)] border border-[var(--border)] rounded-[var(--radius-lg)] shadow-[var(--card-shadow)] backdrop-blur-xl transition-all w-full max-w-xl overflow-hidden z-[101] flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-black/10">
-          <h3 className="text-[1.125rem] font-semibold text-[var(--text-primary)]">
+          <h3 className="text-[1.125rem] font-semibold text-[var(--text-main)]">
             {title}
           </h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-[var(--radius-sm)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--border)] transition-colors"
+            className="p-1 rounded-[var(--radius-sm)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--border)] transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
