@@ -51,6 +51,17 @@ export default function OverviewTab() {
 
   return (
     <div className="overview-mc" id="view-overview">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-2">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-[var(--text-main)]">
+            {t.layout.overview_title}
+          </h2>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            {language === "en" ? "System overview, active pools and keys performance." : "Общая сводка системы, состояние аккаунтов и лимитов."}
+          </p>
+        </div>
+      </div>
+
       <div className="mc-strip">
         <span className="mc-live">
           <span className={`mc-pulse ${operational ? "" : "is-down"}`} />
@@ -303,15 +314,6 @@ export default function OverviewTab() {
                                   <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{c5h}%</span>
                                   <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
                                     <div className={`h-full ${c5h < 15 ? "bg-[var(--color-danger)]" : c5h < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${c5h}%` }} />
-                                  </div>
-                                </div>
-                              )}
-                              {cW !== null && (
-                                <div className="flex items-center gap-1 ml-1">
-                                  <span className="text-[var(--text-muted)]">W</span>
-                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{cW}%</span>
-                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
-                                    <div className={`h-full ${cW < 15 ? "bg-[var(--color-danger)]" : cW < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${cW}%` }} />
                                   </div>
                                 </div>
                               )}
