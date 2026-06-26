@@ -47,6 +47,8 @@ def map_model_name(model_name: str) -> str:
     if "opus" in m:
         return "claude-4.6-opus-thinking"
     if "pro" in m:
+        if "high" in m or "agent" in m:
+            return "gemini-pro-agent"
         return "gemini-3.1-pro-low-high"
     if "flash" in m:
         if "extra-low" in m or "extra_low" in m:

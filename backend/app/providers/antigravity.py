@@ -158,6 +158,7 @@ class AntigravityProvider(BaseProvider):
             "Gemini 3.1 Flash Lite": "gemini-3.1-flash-lite",
             "Gemini 3.1 Flash Image": "gemini-3.1-flash-image",
             "Gemini 3.1 Pro (Low/High)": "gemini-3.1-pro-low",
+            "Gemini 3.1 Pro (High)": "gemini-pro-agent",
             "Gemini 3 Flash Agent": "gemini-3-flash-agent",
             "Gemini Pro Agent": "gemini-pro-agent",
             "claude-4.6-sonnet": "claude-sonnet-4-6",
@@ -168,7 +169,7 @@ class AntigravityProvider(BaseProvider):
             "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
             "gemini-3.1-flash-image": "gemini-3.1-flash-image",
             "gemini-3.1-pro-low-high": "gemini-3.1-pro-low",
-            "gemini-3.1-pro-high": "gemini-3.1-pro-low",
+            "gemini-3.1-pro-high": "gemini-pro-agent",
             "gemini-3-flash-agent": "gemini-3-flash-agent",
             "gemini-pro-agent": "gemini-pro-agent"
         }
@@ -414,6 +415,7 @@ class AntigravityProvider(BaseProvider):
                                     finish_reason = None
 
                                     tool_calls = []
+                                    chunk_images = []
 
                                     if candidates:
 
@@ -434,6 +436,19 @@ class AntigravityProvider(BaseProvider):
                                             else:
 
                                                 text_content += p_text
+
+                                            if "inlineData" in p:
+                                                mime_type = p["inlineData"].get("mimeType", "image/jpeg")
+                                                base64_data = p["inlineData"].get("data", "")
+                                                if base64_data:
+                                                    text_content += f"\n![Generated Image](data:{mime_type};base64,{base64_data})\n"
+                                                    chunk_images.append({
+                                                        "type": "image_url",
+                                                        "image_url": {
+                                                            "url": f"data:{mime_type};base64,{base64_data}"
+                                                        },
+                                                        "index": len(chunk_images)
+                                                    })
 
                                             if "functionCall" in p:
 
@@ -518,6 +533,10 @@ class AntigravityProvider(BaseProvider):
                                     if tool_calls:
 
                                         delta["tool_calls"] = tool_calls
+
+                                    if chunk_images:
+
+                                        delta["images"] = chunk_images
                                     choice = {
                                         "index": 0,
                                         "delta": delta,
@@ -564,6 +583,9 @@ class AntigravityProvider(BaseProvider):
             all_tool_calls = []
 
 
+            all_images = []
+
+
             final_usage = None
 
 
@@ -598,6 +620,12 @@ class AntigravityProvider(BaseProvider):
 
 
                         full_reasoning.append(choice.delta["reasoning_content"])
+
+
+                    if choice.delta.get("images"):
+
+
+                        all_images.extend(choice.delta["images"])
 
 
                     if choice.delta.get("tool_calls"):
@@ -676,6 +704,12 @@ class AntigravityProvider(BaseProvider):
 
 
             }
+
+
+            if all_images:
+
+
+                message_body["images"] = all_images
 
 
             if full_reasoning:
