@@ -70,6 +70,72 @@ export default function LogsTab() {
   const hasNoKeys = virtualKeys.length === 0;
   const hasNoCreds = availableModels.length === 0;
 
+  const renderResponseContent = (text: string) => {
+    if (!text) return null;
+
+    const imgRegex = /!\[(.*?)\]\((.*?)\)/g;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = imgRegex.exec(text)) !== null) {
+      const matchIndex = match.index;
+      if (matchIndex > lastIndex) {
+        parts.push(text.substring(lastIndex, matchIndex));
+      }
+
+      const alt = match[1];
+      const url = match[2];
+
+      parts.push(
+        <div key={matchIndex} className="my-3 flex flex-col items-center gap-2 bg-[var(--bg-panel)] p-2 rounded-[var(--radius-md)] border border-[var(--border)] max-w-full">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={alt || "Generated Image"}
+            className="max-w-full h-auto rounded-[var(--radius-sm)] shadow-sm max-h-[350px] object-contain"
+          />
+          {alt && (
+            <span className="text-xs text-[var(--text-muted)] font-sans italic">
+              {alt}
+            </span>
+          )}
+        </div>
+      );
+
+      lastIndex = imgRegex.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      const remaining = text.substring(lastIndex);
+      const trimmed = remaining.trim();
+      if (parts.length === 0 && (trimmed.startsWith("data:image/") || trimmed.startsWith("data:application/octet-stream;base64,"))) {
+        return (
+          <div className="flex flex-col items-center gap-2 bg-[var(--bg-panel)] p-2 rounded-[var(--radius-md)] border border-[var(--border)] max-w-full">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={trimmed}
+              alt="Generated Image"
+              className="max-w-full h-auto rounded-[var(--radius-sm)] shadow-sm max-h-[350px] object-contain"
+            />
+          </div>
+        );
+      }
+      parts.push(remaining);
+    }
+
+    return (
+      <>
+        {parts.map((part, index) => {
+          if (typeof part === "string") {
+            return <span key={index}>{part}</span>;
+          }
+          return part;
+        })}
+      </>
+    );
+  };
+
   return (
     <div className="overview-mc flex flex-col gap-6" id="view-logs">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -286,7 +352,9 @@ export default function LogsTab() {
                 {t.logs.lbl_response}
               </label>
               <div className="w-full p-4 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] text-sm text-[var(--text-main)] font-sans whitespace-pre-wrap max-h-[250px] overflow-y-auto border-l-4 border-l-[var(--primary)] shadow-inner">
-                {result.response || (
+                {result.response ? (
+                  renderResponseContent(result.response)
+                ) : (
                   <span className="text-[var(--text-muted)] italic">
                     {language === "en" ? "[Empty Response]" : "[Пустой ответ]"}
                   </span>

@@ -441,14 +441,27 @@ class AntigravityProvider(BaseProvider):
                                                 mime_type = p["inlineData"].get("mimeType", "image/jpeg")
                                                 base64_data = p["inlineData"].get("data", "")
                                                 if base64_data:
-                                                    text_content += f"\n![Generated Image](data:{mime_type};base64,{base64_data})\n"
-                                                    chunk_images.append({
-                                                        "type": "image_url",
-                                                        "image_url": {
-                                                            "url": f"data:{mime_type};base64,{base64_data}"
-                                                        },
-                                                        "index": len(chunk_images)
-                                                    })
+                                                    is_jumb = False
+                                                    if base64_data.startswith("anVtY"):
+                                                        is_jumb = True
+                                                    else:
+                                                        try:
+                                                            import base64
+                                                            header_bytes = base64.b64decode(base64_data[:32])
+                                                            if b"jumb" in header_bytes:
+                                                                is_jumb = True
+                                                        except Exception:
+                                                            pass
+                                                    
+                                                    if not is_jumb:
+                                                        text_content += f"\n![Generated Image](data:{mime_type};base64,{base64_data})\n"
+                                                        chunk_images.append({
+                                                            "type": "image_url",
+                                                            "image_url": {
+                                                                "url": f"data:{mime_type};base64,{base64_data}"
+                                                            },
+                                                            "index": len(chunk_images)
+                                                        })
 
                                             if "functionCall" in p:
 
