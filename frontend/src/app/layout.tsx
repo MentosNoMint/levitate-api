@@ -5,7 +5,7 @@ import "./globals.css";
 
 const plusJakarta = Plus_Jakarta_Sans({
   variable: "--font-plus-jakarta",
-  subsets: ["latin", "cyrillic"],
+  subsets: ["latin"],
 });
 
 const jetbrainsMono = JetBrains_Mono({
