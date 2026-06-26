@@ -72,9 +72,17 @@
 body {
   color: var(--text-main);
   background-color: var(--bg-app);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-plus-jakarta), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(255, 79, 24, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(193, 8, 1, 0.03) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.03em;
 }
 
 .focus-ring:focus-visible {
@@ -110,9 +118,10 @@ body {
 }
 
 .metric-value {
-  font-size: 2rem;
+  font-size: 2.25rem;
   font-weight: 700;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.05em;
+  line-height: 1.1;
 }
 
 .metric-footer {
@@ -289,11 +298,12 @@ body {
 }
 
 .detail-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
   text-transform: uppercase;
   font-weight: 600;
-  margin-bottom: 0.25rem;
+  letter-spacing: 0.07em;
+  margin-bottom: 0.35rem;
 }
 
 .detail-value {
@@ -413,7 +423,7 @@ input, select, textarea {
 }
 
 .mc-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono", monospace;
+  font-family: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono", monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -476,18 +486,19 @@ input, select, textarea {
 .mc-card {
   background: var(--mc-panel);
   border: 0.0625rem solid var(--mc-border);
-  border-radius: 0.625rem;
-  padding: 1.1rem 1.15rem 0.9rem;
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.25rem 1.05rem;
   box-shadow: var(--mc-shadow);
   position: relative;
   overflow: hidden;
   color: var(--mc-text);
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease;
 }
 
 .mc-card:hover {
   border-color: var(--mc-border-strong);
-  transform: translateY(-0.125rem);
+  transform: translateY(-0.15rem);
+  box-shadow: inset 0 0.0625rem 0 0 var(--mc-hairline), 0 1rem 2rem -1rem rgba(0, 0, 0, 0.95);
 }
 
 .mc-kpi-top {
@@ -497,9 +508,11 @@ input, select, textarea {
 }
 
 .mc-kpi-label {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--mc-muted);
-  font-weight: 500;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .mc-kpi-ic {
@@ -509,10 +522,10 @@ input, select, textarea {
 }
 
 .mc-kpi-value {
-  font-size: 1.9rem;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-  margin: 0.5rem 0 0.1rem;
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+  margin: 0.4rem 0 0.1rem;
   line-height: 1;
 }
 
@@ -654,21 +667,26 @@ input, select, textarea {
   border-collapse: collapse;
   text-align: left;
   font-size: 0.8125rem;
+  table-layout: fixed;
+}
+
+.mc-card, .mc-panel, .primary-action-btn, .premium-input, .premium-select, .mc-pill, button {
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .mc-table thead th {
   font-size: 0.6875rem;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.09em;
   font-weight: 600;
   color: var(--mc-dim);
-  padding: 0.7rem 1.25rem;
+  padding: 0.85rem 1.25rem;
   background: var(--mc-subtle);
   border-bottom: 0.0625rem solid var(--mc-border);
 }
 
 .mc-table tbody td {
-  padding: 0.8rem 1.25rem;
+  padding: 1.05rem 1.25rem;
   border-bottom: 0.0625rem solid var(--mc-border);
   vertical-align: middle;
 }

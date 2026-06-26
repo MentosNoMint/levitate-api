@@ -14,6 +14,10 @@ const config: Config = {
         foreground: "var(--foreground)",
         border: "var(--border)",
       },
+      fontFamily: {
+        sans: ["var(--font-plus-jakarta)", "system-ui", "sans-serif"],
+        mono: ["var(--font-jetbrains-mono)", "monospace"],
+      },
     },
   },
   plugins: [],
