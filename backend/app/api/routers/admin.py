@@ -1,7 +1,8 @@
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User
@@ -103,9 +104,19 @@ async def get_logs(current_user: User = Depends(get_current_user), db: AsyncSess
 async def clear_logs(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     return await stats_service.clear_logs(db, current_user.id)
 
+class SimulateRequest(BaseModel):
+    model: Optional[str] = None
+    prompt: Optional[str] = None
+
 @router.post("/logs/simulate")
-async def simulate_log(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    return await stats_service.simulate_log(db, current_user.id)
+async def simulate_log(
+    payload: Optional[SimulateRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    model = payload.model if payload else None
+    prompt = payload.prompt if payload else None
+    return await stats_service.simulate_log(db, current_user.id, model=model, prompt=prompt)
 
 @router.post("/credentials/{id}/refresh-quota")
 async def refresh_credential_quota(

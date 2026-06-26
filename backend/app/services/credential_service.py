@@ -133,16 +133,20 @@ async def test_credential(db: AsyncSession, credential_id: uuid.UUID, user_id: u
     try:
         if cred.type == "antigravity":
             provider = AntigravityProvider(cred)
+            refresh_result = await provider.fetch_quota()
+            if "error" in refresh_result or refresh_result.get("status") == "error":
+                err_msg = refresh_result.get("error") or refresh_result.get("load_error") or refresh_result.get("quota_error") or "Failed to connect to Google API"
+                return {"status": "failed", "error": err_msg}
+            return {"status": "success", "message": "Credential connects successfully"}
         else:
             provider = BYOUpstreamProvider(cred)
-
-        model = cred.models[0] if cred.models else "gpt-3.5-turbo"
-        await provider.chat_completion(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1
-        )
-        return {"status": "success", "message": "Credential connects successfully"}
+            model = cred.models[0] if cred.models else "gpt-3.5-turbo"
+            await provider.chat_completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1
+            )
+            return {"status": "success", "message": "Credential connects successfully"}
     except Exception as e:
         return {"status": "failed", "error": str(e)}
 

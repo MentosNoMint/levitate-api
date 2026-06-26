@@ -131,7 +131,7 @@ async def clear_logs(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
         await db.commit()
     return {"status": "cleared"}
 
-async def simulate_log(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
+async def simulate_log(db: AsyncSession, user_id: uuid.UUID, model: str = None, prompt: str = None) -> Dict[str, Any]:
     vkeys_stmt = select(VirtualKey).where(VirtualKey.user_id == user_id)
     vkeys_res = await db.execute(vkeys_stmt)
     vkey = vkeys_res.scalars().first()
@@ -142,32 +142,120 @@ async def simulate_log(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
             detail="User must have at least one virtual key to run simulations."
         )
 
+    # Получаем все активные credentials
     cred_stmt = select(Credential).where(Credential.status == "active")
     cred_res = await db.execute(cred_stmt)
-    cred = cred_res.scalars().first()
+    creds = cred_res.scalars().all()
 
-    prompt = random.randint(100, 2000)
-    completion = random.randint(50, 1000)
-    cost = (prompt + completion) * 0.000015
+    if not creds:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active AI accounts found to make a real test request. Please activate or add at least one account."
+        )
+
+    cred = None
+    if model:
+        # Пытаемся найти аккаунт, который явно поддерживает выбранную модель
+        for c in creds:
+            if c.models and model in c.models:
+                cred = c
+                break
+
+    # Если не нашли по модели, берем первый активный
+    if not cred:
+        cred = creds[0]
+
+    # Если модель не была передана, берем первую поддерживаемую
+    if not model:
+        if cred.models and len(cred.models) > 0:
+            model = cred.models[0]
+        else:
+            model = "gemini-3.1-pro-high" if cred.type == "antigravity" else "gpt-3.5-turbo"
+
+    if not prompt:
+        prompt = "Hello. Output exactly the word 'OK' and nothing else."
+
+    import time
+    start_time = time.time()
+    err_msg = None
+    status_str = "error"
+    prompt_tokens = 0
+    completion_tokens = 0
+    response_content = ""
+
+    if cred.type == "antigravity":
+        from app.providers.antigravity import AntigravityProvider
+        provider = AntigravityProvider(cred)
+    else:
+        from app.providers.byo_upstream import BYOUpstreamProvider
+        provider = BYOUpstreamProvider(cred)
+
+    try:
+        response = await provider.chat_completion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        usage = getattr(response, "usage", None)
+        prompt_tokens = usage.prompt_tokens if usage else 1
+        completion_tokens = usage.completion_tokens if usage else 1
+        
+        if response and hasattr(response, "choices") and response.choices:
+            choice = response.choices[0]
+            if hasattr(choice, "message") and choice.message:
+                response_content = getattr(choice.message, "content", "") or ""
+            elif hasattr(choice, "delta") and choice.delta:
+                response_content = getattr(choice.delta, "content", "") or ""
+                
+        status_str = "success"
+    except Exception as e:
+        latency_ms = int((time.time() - start_time) * 1000)
+        err_msg = str(e)
+        status_str = "error"
+
+    cost = (prompt_tokens + completion_tokens) * 0.000015
     
     event = UsageEvent(
         virtual_key_id=vkey.id,
-        credential_id=cred.id if cred else None,
-        model="gpt-4o" if (cred and "openai" in cred.provider.lower()) else "claude-3-5-sonnet",
-        prompt_tokens=prompt,
-        completion_tokens=completion,
+        credential_id=cred.id,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         est_cost=cost,
-        latency_ms=random.randint(100, 800),
-        status="success" if random.random() > 0.1 else "error",
+        latency_ms=latency_ms,
+        status=status_str,
         created_at=datetime.now(timezone.utc)
     )
     db.add(event)
     
     audit = AuditLog(
         event_type="simulation",
-        payload_metadata={"model": event.model, "cost": cost}
+        payload_metadata={
+            "model": event.model,
+            "cost": cost,
+            "real_request": True,
+            "error": err_msg,
+            "prompt": prompt,
+            "response": response_content[:500] if response_content else None
+        }
     )
     db.add(audit)
     
     await db.commit()
-    return {"status": "success"}
+    
+    if status_str == "error":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Real test request to {model} failed: {err_msg}. Check your account status."
+        )
+        
+    return {
+        "status": "success",
+        "model": model,
+        "latency": latency_ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "response": response_content
+    }

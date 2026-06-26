@@ -8,6 +8,29 @@ export default function CredentialsTab() {
   const { language, credentials, addCredential, updateCredentialPriorityWeight, toggleCredentialStatus, token, refreshCredentialQuota, refreshAllQuotas, deleteCredential } = useDashboardStore();
   const t = translations[language];
 
+  const renderErrorWithLinks = (text: string) => {
+    if (!text) return null;
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    return parts.map((part, index) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-[var(--primary)] hover:text-[var(--primary-hover)] break-all inline-flex items-center gap-0.5"
+          >
+            {part}
+            <ExternalLink className="w-3 h-3 inline shrink-0" />
+          </a>
+        );
+      }
+      return part;
+    });
+  };
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [expandedCredIds, setExpandedCredIds] = useState<Record<string, boolean>>({});
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
@@ -763,12 +786,12 @@ export default function CredentialsTab() {
                                       <div className="flex flex-col gap-1">
                                         {cred.loadError && (
                                           <div>
-                                            <span className="font-bold">Load Error:</span> {cred.loadError}
+                                            <span className="font-bold">Load Error:</span> {renderErrorWithLinks(cred.loadError)}
                                           </div>
                                         )}
                                         {cred.quotaError && (
                                           <div>
-                                            <span className="font-bold">Quota Error:</span> {cred.quotaError}
+                                            <span className="font-bold">Quota Error:</span> {renderErrorWithLinks(cred.quotaError)}
                                           </div>
                                         )}
                                       </div>

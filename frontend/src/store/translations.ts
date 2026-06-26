@@ -156,6 +156,16 @@ export interface TranslationSchema {
     col_response: string;
     empty_state: string;
     tokens_format: string;
+    test_modal_title: string;
+    lbl_select_model: string;
+    lbl_prompt: string;
+    placeholder_prompt: string;
+    btn_send: string;
+    btn_sending: string;
+    lbl_response: string;
+    lbl_tokens: string;
+    lbl_latency: string;
+    msg_no_active_creds: string;
   };
   mock: {
     "Antigravity OpenAI Enterprise": string;
@@ -329,7 +339,17 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       col_cost: "Cost",
       col_response: "Result",
       empty_state: "No requests yet. Click \"Send Test Request\" to simulate some traffic.",
-      tokens_format: "{prompt}p / {completion}c"
+      tokens_format: "{prompt}p / {completion}c",
+      test_modal_title: "Send Test Request",
+      lbl_select_model: "Select Model",
+      lbl_prompt: "User Message / Prompt",
+      placeholder_prompt: "Enter your prompt...",
+      btn_send: "Send Request",
+      btn_sending: "Sending...",
+      lbl_response: "Assistant Response",
+      lbl_tokens: "Tokens Used",
+      lbl_latency: "Latency",
+      msg_no_active_creds: "You need at least one active AI account to send requests."
     },
     mock: {
       "Antigravity OpenAI Enterprise": "Antigravity OpenAI Enterprise",
@@ -501,7 +521,17 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       col_cost: "Стоимость",
       col_response: "Результат",
       empty_state: "Запросов пока нет. Нажмите \"Отправить тестовый запрос\", чтобы сгенерировать трафик.",
-      tokens_format: "{prompt}вх / {completion}исх"
+      tokens_format: "{prompt}вх / {completion}исх",
+      test_modal_title: "Отправить тестовый запрос",
+      lbl_select_model: "Выберите модель",
+      lbl_prompt: "Сообщение пользователя / Промпт",
+      placeholder_prompt: "Введите текст запроса...",
+      btn_send: "Отправить запрос",
+      btn_sending: "Отправка...",
+      lbl_response: "Ответ ассистента",
+      lbl_tokens: "Потрачено токенов",
+      lbl_latency: "Время ответа",
+      msg_no_active_creds: "Для отправки запросов нужен как минимум один активный аккаунт."
     },
     mock: {
       "Antigravity OpenAI Enterprise": "Antigravity OpenAI Enterprise",

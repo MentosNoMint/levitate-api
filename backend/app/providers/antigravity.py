@@ -163,6 +163,7 @@ class AntigravityProvider(BaseProvider):
             "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
             "gemini-3.1-flash-image": "gemini-3.1-flash-image",
             "gemini-3.1-pro-low-high": "gemini-3.1-pro-low",
+            "gemini-3.1-pro-high": "gemini-3.1-pro-low",
             "gemini-3-flash-agent": "gemini-3-flash-agent",
             "gemini-pro-agent": "gemini-pro-agent"
         }
@@ -902,7 +903,22 @@ class AntigravityProvider(BaseProvider):
                 access_token = await self.get_access_token(force_refresh=(attempt > 0))
             except Exception as e:
                 if attempt == 1:
-                    return {"error": f"Failed to get access token: {str(e)}"}
+                    async with AsyncSessionLocal() as db:
+                        stmt = (
+                            update(Credential)
+                            .where(Credential.id == self.credential.id)
+                            .values(
+                                status="error",
+                                last_check_at=datetime.now(timezone.utc),
+                                quota_total_tokens=1000000,
+                                quota_used_tokens=1000000,
+                                model_quotas={},
+                            )
+                        )
+                        await db.execute(stmt)
+                        await db.commit()
+                    await self._save_quota_metadata(tier="unknown", load_error=str(e))
+                    return {"error": f"Failed to get access token: {str(e)}", "load_error": str(e), "status": "error"}
                 continue
             headers = _antigravity_headers(access_token)
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -1100,10 +1116,32 @@ class AntigravityProvider(BaseProvider):
             "raw_quota": quota_data,
         }
 
-        if load_resp.status_code != 200:
-            result["load_error"] = f"HTTP {load_resp.status_code}: {load_resp.text[:200]}"
-        if quota_resp.status_code != 200:
-            result["quota_error"] = f"HTTP {quota_resp.status_code}: {quota_resp.text[:200]}"
+        def extract_validation_url(text: str) -> str:
+            try:
+                data = json.loads(text)
+                details = data.get("error", {}).get("details", [])
+                for detail in details:
+                    if detail.get("reason") == "VALIDATION_REQUIRED" or detail.get("metadata", {}).get("validation_url"):
+                        metadata = detail.get("metadata", {})
+                        val_url = metadata.get("validation_url")
+                        if val_url:
+                            return val_url
+            except Exception:
+                pass
+            return None
+
+        if load_resp is not None and load_resp.status_code != 200:
+            val_url = extract_validation_url(load_resp.text)
+            if val_url:
+                result["load_error"] = f"Verify your account to continue: {val_url}"
+            else:
+                result["load_error"] = f"HTTP {load_resp.status_code}: {load_resp.text[:200]}"
+        if quota_resp is not None and quota_resp.status_code != 200:
+            val_url = extract_validation_url(quota_resp.text)
+            if val_url:
+                result["quota_error"] = f"Verify your account to continue: {val_url}"
+            else:
+                result["quota_error"] = f"HTTP {quota_resp.status_code}: {quota_resp.text[:200]}"
 
         await self._save_quota_metadata(
             tier=tier,

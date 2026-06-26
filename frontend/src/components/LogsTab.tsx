@@ -1,14 +1,63 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useDashboardStore } from "@/store/dashboardStore";
-import { Trash2, Radio } from "lucide-react";
+import { Trash2, Radio, Send, Loader2, Play } from "lucide-react";
 import { translations } from "@/store/translations";
+import { Modal } from "./Modal";
 
 export default function LogsTab() {
-  const { language, logs, virtualKeys, simulateLog, clearLogs } = useDashboardStore();
+  const { language, logs, virtualKeys, credentials, simulateLog, clearLogs } = useDashboardStore();
   const t = translations[language];
 
+  // State for Test Request Modal
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [promptText, setPromptText] = useState("Hello. Output exactly the word 'OK' and nothing else.");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    model: string;
+    latency: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    response: string;
+  } | null>(null);
+
+  const activeCredentials = credentials.filter(c => c.status === "active");
+  const availableModels = Array.from(
+    new Set(activeCredentials.flatMap(c => c.models || []))
+  );
+
+  useEffect(() => {
+    if (availableModels.length > 0 && !selectedModel) {
+      setSelectedModel(availableModels[0]);
+    }
+  }, [availableModels, selectedModel]);
+
   const handleSimulateRequest = () => {
-    simulateLog();
+    setError(null);
+    setResult(null);
+    setIsModalOpen(true);
+  };
+
+  const handleSendTestRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedModel) {
+      setError(t.logs.msg_no_active_creds);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const data = await simulateLog(selectedModel, promptText);
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || "Failed to execute request");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const getStatusText = (status: number, statusText: string) => {
@@ -19,6 +68,7 @@ export default function LogsTab() {
   };
 
   const hasNoKeys = virtualKeys.length === 0;
+  const hasNoCreds = availableModels.length === 0;
 
   return (
     <div className="overview-mc flex flex-col gap-6" id="view-logs">
@@ -34,8 +84,8 @@ export default function LogsTab() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleSimulateRequest}
-            disabled={hasNoKeys}
-            className={`primary-action-btn focus-ring flex items-center gap-2 ${hasNoKeys ? "opacity-50 cursor-not-allowed" : ""}`}
+            disabled={hasNoKeys || hasNoCreds}
+            className={`primary-action-btn focus-ring flex items-center gap-2 ${(hasNoKeys || hasNoCreds) ? "opacity-50 cursor-not-allowed" : ""}`}
           >
             <Radio className="w-4 h-4 animate-pulse" />
             {t.logs.btn_simulate}
@@ -115,6 +165,137 @@ export default function LogsTab() {
           </tbody>
         </table>
       </div>
+
+      {/* Test Request Modal */}
+      <Modal
+        open={isModalOpen}
+        onClose={() => !isLoading && setIsModalOpen(false)}
+        title={t.logs.test_modal_title}
+      >
+        <form onSubmit={handleSendTestRequest} className="flex flex-col gap-4">
+          {/* Model Selection */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold text-[var(--text-muted)]">
+              {t.logs.lbl_select_model}
+            </label>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              disabled={isLoading}
+              className="w-full px-3 py-2 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] text-[var(--text-main)] text-sm focus:outline-none focus:border-[var(--primary)] transition-colors disabled:opacity-50"
+            >
+              {availableModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Prompt */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold text-[var(--text-muted)]">
+              {t.logs.lbl_prompt}
+            </label>
+            <textarea
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              disabled={isLoading}
+              rows={3}
+              placeholder={t.logs.placeholder_prompt}
+              className="w-full px-3 py-2 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] text-[var(--text-main)] text-sm focus:outline-none focus:border-[var(--primary)] transition-colors disabled:opacity-50 resize-none font-sans"
+            />
+          </div>
+
+          {/* Submit Button */}
+          <div className="flex justify-end gap-2 pt-2 border-t border-[var(--border)]">
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(false)}
+              disabled={isLoading}
+              className="px-4 py-2 bg-transparent text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-panel-hover)] text-sm font-medium rounded-[var(--radius-md)] transition-colors disabled:opacity-50 focus-ring"
+            >
+              {translations[language].common.cancel}
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || !selectedModel}
+              className={`primary-action-btn focus-ring flex items-center gap-2 ${(isLoading || !selectedModel) ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {t.logs.btn_sending}
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  {t.logs.btn_send}
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+
+        {/* Loader Display */}
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center py-8 gap-3 text-[var(--text-muted)]">
+            <Loader2 className="w-8 h-8 animate-spin text-[var(--primary)]" />
+            <span className="text-sm font-medium">
+              {language === "en" ? "Executing request on upstream AI..." : "Выполняется запрос к оригинальной ИИ..."}
+            </span>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {error && (
+          <div className="mt-4 p-4 bg-red-950/20 border border-red-500/30 text-red-400 rounded-[var(--radius-md)] text-xs break-all">
+            <p className="font-semibold mb-1">
+              {language === "en" ? "Error occurred:" : "Произошла ошибка:"}
+            </p>
+            <p className="font-mono">{error}</p>
+          </div>
+        )}
+
+        {/* Result Display */}
+        {result && (
+          <div className="mt-4 flex flex-col gap-3">
+            {/* Metadata metrics */}
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div className="p-2.5 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] flex flex-col gap-0.5">
+                <span className="text-[var(--text-muted)] font-sans font-semibold">
+                  {t.logs.lbl_latency}
+                </span>
+                <span className="text-sm font-bold text-[var(--text-main)]">
+                  {result.latency} ms
+                </span>
+              </div>
+              <div className="p-2.5 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] flex flex-col gap-0.5">
+                <span className="text-[var(--text-muted)] font-sans font-semibold">
+                  {t.logs.lbl_tokens}
+                </span>
+                <span className="text-sm font-bold text-[var(--text-main)]">
+                  {result.prompt_tokens}p / {result.completion_tokens}c
+                </span>
+              </div>
+            </div>
+
+            {/* Answer body */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-[var(--text-muted)]">
+                {t.logs.lbl_response}
+              </label>
+              <div className="w-full p-4 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] text-sm text-[var(--text-main)] font-sans whitespace-pre-wrap max-h-[250px] overflow-y-auto border-l-4 border-l-[var(--primary)] shadow-inner">
+                {result.response || (
+                  <span className="text-[var(--text-muted)] italic">
+                    {language === "en" ? "[Empty Response]" : "[Пустой ответ]"}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

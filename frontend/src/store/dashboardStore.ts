@@ -184,7 +184,7 @@ interface DashboardState {
     models?: string[]
   ) => Promise<void>;
   toggleCredentialStatus: (id: string, status: Credential["status"]) => Promise<void>;
-  simulateLog: () => Promise<void>;
+  simulateLog: (model?: string, prompt?: string) => Promise<{ status: string; model: string; latency: number; prompt_tokens: number; completion_tokens: number; response: string }>;
   clearLogs: () => Promise<void>;
   refreshCredentialQuota: (id: string) => Promise<void>;
   refreshAllQuotas: () => Promise<void>;
@@ -520,13 +520,22 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  simulateLog: async () => {
+  simulateLog: async (model, prompt) => {
     const { token, fetchData } = get();
     try {
-      await apiFetch("/admin/logs/simulate", { method: "POST" }, token);
+      const resp = await apiFetch("/admin/logs/simulate", {
+        method: "POST",
+        body: JSON.stringify({ model, prompt }),
+      }, token);
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || "Test request failed");
+      }
+      const data = await resp.json();
       await fetchData();
-    } catch {
-      // Simulation error fallback
+      return data;
+    } catch (e: any) {
+      throw e;
     }
   },
 
