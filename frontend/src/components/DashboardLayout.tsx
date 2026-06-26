@@ -214,14 +214,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       )}
 
       <main className="flex-1 flex flex-col h-full overflow-hidden">
-        <header className="p-6 md:p-8 pb-3 md:pb-4 flex flex-col gap-1 shrink-0">
-          <div className="text-xs text-[var(--text-dark)] uppercase tracking-wider font-semibold">
-            {t.layout.console_title}
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-main)]">
-            {getTabTitle()}
-          </h1>
-        </header>
         <div className="flex-1 p-6 md:p-8 pt-3 md:pt-4 overflow-x-hidden overflow-y-auto">
           {children}
         </div>
