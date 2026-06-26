@@ -41,32 +41,32 @@
 }
 
 [data-theme="light"] {
-  --background: #1b1d21;
-  --foreground: #f0f0f0;
-  --bg-app: #1b1d21;
-  --bg-panel: #242629;
-  --bg-panel-hover: #2e3035;
-  --bg-subtle: #242629;
+  --background: #f8f9fa;
+  --foreground: #121316;
+  --bg-app: #f8f9fa;
+  --bg-panel: #ffffff;
+  --bg-panel-hover: #f1f2f4;
+  --bg-subtle: #fafafb;
   
-  --border: #35373d;
+  --border: #e4e5e7;
   --border-active: #ff4f18;
   
   --primary: #ff4f18;
-  --primary-dim: rgba(255, 79, 24, 0.12);
+  --primary-dim: rgba(255, 79, 24, 0.1);
   --primary-hover: #d83a0f;
   
-  --text-main: #f0f0f0;
-  --text-muted: #9a9ca3;
-  --text-dark: #62646a;
+  --text-main: #121316;
+  --text-muted: #64666e;
+  --text-dark: #8e9098;
 
-  --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5), inset 0 1px 1px 0 rgba(255, 255, 255, 0.04);
+  --card-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.04), inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
 
-  --tag-managed-bg: rgba(255, 79, 24, 0.12);
+  --tag-managed-bg: rgba(255, 79, 24, 0.08);
   --tag-managed-text: #ff4f18;
-  --tag-byo-bg: rgba(100, 100, 100, 0.15);
-  --tag-byo-text: #9a9ca3;
+  --tag-byo-bg: rgba(100, 100, 100, 0.08);
+  --tag-byo-text: #64666e;
   --code-text: #ff4f18;
-  --branding-gradient: linear-gradient(135deg, #1b1d21 0%, #c10801 35%, #ff4f18 70%, #d9c3ab 100%);
+  --branding-gradient: linear-gradient(135deg, #ffffff 0%, #ffeae5 50%, #ff4f18 100%);
 }
 
 body {
@@ -405,21 +405,21 @@ input, select, textarea {
 }
 
 [data-theme="light"] .overview-mc {
-  --mc-panel: #242629;
-  --mc-elev: #2e3035;
-  --mc-subtle: #282a2e;
-  --mc-border: #35373d;
-  --mc-border-strong: #9a9ca3;
-  --mc-text: #f0f0f0;
-  --mc-muted: #9a9ca3;
-  --mc-dim: #62646a;
-  --mc-grid: rgba(255, 255, 255, 0.04);
-  --mc-ok: #34d399;
-  --mc-warn: #fbbf24;
-  --mc-danger: #f87171;
-  --mc-neutral: #7b8494;
-  --mc-hairline: rgba(255, 255, 255, 0.05);
-  --mc-shadow: inset 0 0.0625rem 0 0 var(--mc-hairline), 0 0.5rem 1.5rem -1rem rgba(0, 0, 0, 0.6);
+  --mc-panel: #ffffff;
+  --mc-elev: #fafafb;
+  --mc-subtle: #f8f9fa;
+  --mc-border: #e4e5e7;
+  --mc-border-strong: #a1a2a9;
+  --mc-text: #121316;
+  --mc-muted: #64666e;
+  --mc-dim: #8e9098;
+  --mc-grid: rgba(0, 0, 0, 0.03);
+  --mc-ok: #10b981;
+  --mc-warn: #f59e0b;
+  --mc-danger: #ef4444;
+  --mc-neutral: #71717a;
+  --mc-hairline: rgba(0, 0, 0, 0.02);
+  --mc-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.05);
 }
 
 .mc-mono {
@@ -498,7 +498,7 @@ input, select, textarea {
 .mc-card:hover {
   border-color: var(--mc-border-strong);
   transform: translateY(-0.15rem);
-  box-shadow: inset 0 0.0625rem 0 0 var(--mc-hairline), 0 1rem 2rem -1rem rgba(0, 0, 0, 0.95);
+  box-shadow: var(--card-shadow), 0 10px 25px -5px rgba(0, 0, 0, 0.1);
 }
 
 .mc-kpi-top {
