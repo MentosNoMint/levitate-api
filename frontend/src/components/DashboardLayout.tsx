@@ -182,7 +182,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               }`}
               aria-label="Switch to Light Theme"
             >
-              {language === "en" ? "Light" : "Светлая"}
+              {t.layout.theme_light}
             </button>
             <button
               onClick={() => setTheme("dark")}
@@ -193,7 +193,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               }`}
               aria-label="Switch to Dark Theme"
             >
-              {language === "en" ? "Dark" : "Тёмная"}
+              {t.layout.theme_dark}
             </button>
           </div>
           <button

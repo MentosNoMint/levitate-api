@@ -30,9 +30,7 @@ export default function VirtualKeysTab() {
   const [copied, setCopied] = useState(false);
 
   const handleDeleteKey = async (id: string, name: string) => {
-    const confirmText = language === "ru"
-      ? `Вы действительно хотите удалить API-ключ "${name}"?`
-      : `Are you sure you want to delete the API key "${name}"?`;
+    const confirmText = `${t.keys.confirm_delete} "${name}"?`;
     if (window.confirm(confirmText)) {
       await deleteVirtualKey(id);
     }
@@ -161,7 +159,7 @@ export default function VirtualKeysTab() {
                   type="number"
                   value={newKeyMonthlyLimit || ""}
                   onChange={(e) => setNewKeyMonthlyLimit(e.target.value === "" ? 0 : Number(e.target.value))}
-                  placeholder={language === "ru" ? "0 или пусто для безлимита" : "0 or empty for unlimited"}
+                  placeholder={t.keys.placeholder_unlimited}
                   className="premium-input outline-none"
                   min={0}
                 />
@@ -176,7 +174,7 @@ export default function VirtualKeysTab() {
                   type="number"
                   value={newKeyRpmLimit || ""}
                   onChange={(e) => setNewKeyRpmLimit(e.target.value === "" ? 0 : Number(e.target.value))}
-                  placeholder={language === "ru" ? "0 или пусто для безлимита" : "0 or empty for unlimited"}
+                  placeholder={t.keys.placeholder_unlimited}
                   className="premium-input outline-none"
                   min={0}
                 />
@@ -336,7 +334,7 @@ export default function VirtualKeysTab() {
                           <button
                             onClick={() => handleDeleteKey(key.id, key.name)}
                             className="p-2 text-[var(--text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--bg-panel-hover)] rounded-md focus-ring"
-                            title={language === "ru" ? "Удалить ключ" : "Delete key"}
+                            title={t.keys.btn_delete}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>

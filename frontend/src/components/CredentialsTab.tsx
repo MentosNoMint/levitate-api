@@ -225,7 +225,7 @@ export default function CredentialsTab() {
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
             </svg>
-            {language === "en" ? "Refresh Quotas" : "Обновить квоты"}
+            {t.credentials.btn_refresh_quotas}
           </button>
           <button
             onClick={handleConnectGoogle}
@@ -237,7 +237,7 @@ export default function CredentialsTab() {
                 d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.555 0-6.438-2.883-6.438-6.438 0-3.555 2.883-6.438 6.438-6.438 1.547 0 2.956.545 4.062 1.455l3.087-3.087C19.014 1.954 15.823 1 12.24 1 5.922 1 12.24 5.922 1 12.24s4.922 11.24 11.24 11.24c6.318 0 11.24-4.922 11.24-11.24 0-.682-.068-1.364-.205-1.955H12.24Z"
               />
             </svg>
-            {language === "en" ? "Connect Google" : "Подключить Google"}
+            {t.credentials.btn_connect_google}
           </button>
           <button
             onClick={() => setShowAddForm(!showAddForm)}
@@ -377,7 +377,7 @@ export default function CredentialsTab() {
 
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="cred-quota" className="text-xs font-semibold text-[var(--text-muted)]">
-                    {language === "en" ? "Token Quota" : "Квота токенов"}
+                    {t.credentials.lbl_token_quota}
                   </label>
                   <input
                     id="cred-quota"
@@ -392,7 +392,7 @@ export default function CredentialsTab() {
 
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="cred-window" className="text-xs font-semibold text-[var(--text-muted)]">
-                  {language === "en" ? "Reset Window (seconds)" : "Окно сброса (в секундах)"}
+                  {t.credentials.lbl_reset_window}
                 </label>
                 <input
                   id="cred-window"
@@ -406,7 +406,7 @@ export default function CredentialsTab() {
 
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="cred-models" className="text-xs font-semibold text-[var(--text-muted)]">
-                  {language === "en" ? "Supported Models (comma-separated)" : "Поддерживаемые модели (через запятую)"}
+                  {t.credentials.lbl_supported_models}
                 </label>
                 <input
                   id="cred-models"
@@ -596,7 +596,7 @@ export default function CredentialsTab() {
                             ) : remaining !== null && cred.quotaTotalTokens !== null && cred.quotaTotalTokens > 0 ? (
                               <div className="flex flex-col gap-1 w-full max-w-[12rem]" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex justify-between items-center gap-2 text-[0.6875rem] font-mono text-[var(--mc-muted)]">
-                                  <span>{language === "en" ? "Remaining:" : "Осталось:"}</span>
+                                  <span>{t.credentials.lbl_remaining}</span>
                                   <span className="whitespace-nowrap font-bold text-[var(--mc-text)]">{Math.round(pct)}%</span>
                                 </div>
                                 <div className="w-full h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
@@ -620,7 +620,7 @@ export default function CredentialsTab() {
                             <span className={`mc-pill ${cred.status === "degraded" ? "is-cooldown" : `is-${cred.status}`}`}>
                               <span className="mc-dot" />
                               {cred.status === "degraded"
-                                ? (language === "en" ? "Degraded" : "Снижен")
+                                ? t.common.degraded
                                 : (t.common[cred.status as keyof typeof t.common] || cred.status)}
                             </span>
                           </td>
@@ -681,7 +681,7 @@ export default function CredentialsTab() {
                                       {cred.type !== "managed" && (
                                         <div className="flex flex-col gap-1.5">
                                           <label htmlFor={`models-${cred.id}`} className="text-xs font-semibold text-[var(--text-muted)]">
-                                            {language === "en" ? "Models (comma-separated)" : "Модели (через запятую)"}
+                                            {t.credentials.lbl_models_short}
                                           </label>
                                           <input
                                             id={`models-${cred.id}`}
@@ -746,7 +746,7 @@ export default function CredentialsTab() {
 
                                         <div className="flex flex-col gap-1.5">
                                           <label htmlFor={`window-${cred.id}`} className="text-xs font-semibold text-[var(--text-muted)]">
-                                            {language === "en" ? "Reset Window (seconds)" : "Окно сброса (сек.)"}
+                                            {t.credentials.lbl_reset_window_short}
                                           </label>
                                           <input
                                             id={`window-${cred.id}`}
@@ -811,21 +811,21 @@ export default function CredentialsTab() {
                                           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
                                           </svg>
-                                          {language === "en" ? "Refresh" : "Обновить"}
+                                          {t.common.refresh}
                                         </button>
                                       )}
                                       <button
                                         type="button"
                                         onClick={async (e) => {
                                           e.stopPropagation();
-                                          if (window.confirm(language === "en" ? "Are you sure you want to delete this credential?" : "Вы уверены, что хотите удалить этот аккаунт?")) {
+                                          if (window.confirm(t.credentials.confirm_delete)) {
                                             await deleteCredential(cred.id);
                                           }
                                         }}
                                         className="px-4 py-2 bg-[var(--bg-subtle)] border border-[var(--border)] hover:bg-[var(--color-danger)] hover:text-white rounded-[var(--radius-sm)] transition-colors flex items-center gap-1 text-[var(--text-main)] text-xs"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
-                                        {language === "en" ? "Delete" : "Удалить"}
+                                        {t.credentials.btn_delete}
                                       </button>
                                       <button
                                         type="button"
@@ -876,7 +876,7 @@ export default function CredentialsTab() {
                                    {cred.modelQuotas && (cred.modelQuotas["gemini-weekly"] !== undefined || cred.modelQuotas["3p-weekly"] !== undefined) && (
                                      <div className="flex flex-col gap-3 p-3.5 bg-[var(--bg-app)] border border-[var(--border)] rounded-[var(--radius-md)]">
                                        <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
-                                         {language === "en" ? "Antigravity Usage Limits" : "Лимиты использования Antigravity"}
+                                         {t.credentials.lbl_usage_limits}
                                        </div>
                                        
                                        {/* Группа Gemini */}
@@ -1009,8 +1009,8 @@ export default function CredentialsTab() {
                                         className={`w-3.5 h-3.5 transition-transform ${expandedModels[cred.id] ? "rotate-90 text-[var(--primary)]" : ""}`}
                                       />
                                       {expandedModels[cred.id]
-                                        ? (language === "en" ? `Hide Model Quotas (${modelsToShow.length})` : `Скрыть квоты моделей (${modelsToShow.length})`)
-                                        : (language === "en" ? `Show Model Quotas (${modelsToShow.length})` : `Показать квоты моделей (${modelsToShow.length})`)}
+                                        ? `${t.credentials.btn_hide_model_quotas} (${modelsToShow.length})`
+                                        : `${t.credentials.btn_show_model_quotas} (${modelsToShow.length})`}
                                     </button>
                                   )}
 
@@ -1074,7 +1074,7 @@ export default function CredentialsTab() {
 
                                   {cred.type !== "managed" && (!modelsToShow || modelsToShow.length === 0) && (
                                     <div className="text-xs text-[var(--text-muted)] italic">
-                                      {language === "en" ? "No models configured" : "Модели не настроены"}
+                                      {t.credentials.lbl_no_models}
                                     </div>
                                   )}
                                 </div>

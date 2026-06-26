@@ -92,12 +92,10 @@ export default function LoginScreen() {
               ) : (
                 <div className="w-full flex flex-col gap-2 p-3 bg-indigo-500/5 border border-[var(--primary)]/20 rounded-[var(--radius-md)] text-center">
                   <span className="text-[10px] text-[var(--primary)] font-semibold uppercase tracking-wider">
-                    {language === "en" ? "Local Development Mode" : "Режим локальной разработки"}
+                    {t.login.dev_mode_title}
                   </span>
                   <span className="text-[11px] text-[var(--text-muted)]">
-                    {language === "en"
-                      ? "Google OAuth keys are not set. Use developer mock login to access dashboard."
-                      : "Ключи Google OAuth не настроены. Используйте вход для разработчиков для доступа."}
+                    {t.login.dev_mode_desc}
                   </span>
                 </div>
               )}

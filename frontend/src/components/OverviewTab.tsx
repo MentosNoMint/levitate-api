@@ -57,7 +57,7 @@ export default function OverviewTab() {
             {t.layout.overview_title}
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            {language === "en" ? "System overview, active pools and keys performance." : "Общая сводка системы, состояние аккаунтов и лимитов."}
+            {t.overview.desc}
           </p>
         </div>
       </div>
@@ -65,16 +65,14 @@ export default function OverviewTab() {
       <div className="mc-strip">
         <span className="mc-live">
           <span className={`mc-pulse ${operational ? "" : "is-down"}`} />
-          {operational
-            ? en ? "All systems operational" : "Все системы работают"
-            : en ? "Degraded performance" : "Снижение производительности"}
+          {operational ? t.overview.status_ok : t.overview.status_degraded}
         </span>
         <span className="mc-sep" />
         <span className="mc-ss-item">
-          {en ? "Accounts:" : "Аккаунты:"} <b className="mc-mono">{activePools}/{totalPools}</b> {en ? "active" : "активно"}
+          {t.overview.strip_accounts} <b className="mc-mono">{activePools}/{totalPools}</b> {t.overview.strip_active}
         </span>
         <span className="mc-ss-item">
-          {en ? "Success" : "Успех"} <b className="mc-mono">{stats.gatewaySuccessRate}%</b>
+          {t.overview.strip_success} <b className="mc-mono">{stats.gatewaySuccessRate}%</b>
         </span>
       </div>
 
@@ -233,7 +231,7 @@ export default function OverviewTab() {
                         {t.mock[cred.name as keyof typeof t.mock] || cred.name}
                       </span>
                       <span className="mc-tag">
-                        {cred.type === "managed" ? "Managed" : "BYO"} · {cred.provider}
+                        {cred.type === "managed" ? t.credentials.tag_managed : t.credentials.tag_byo} · {cred.provider}
                       </span>
                     </div>
                   </td>
@@ -241,7 +239,7 @@ export default function OverviewTab() {
                     <span className={`mc-pill ${cred.status === "degraded" ? "is-cooldown" : `is-${cred.status}`}`}>
                       <span className="mc-dot" />
                       {cred.status === "degraded"
-                        ? (language === "en" ? "Degraded" : "Снижен")
+                        ? t.common.degraded
                         : (t.common[cred.status as keyof typeof t.common] || cred.status)}
                     </span>
                   </td>

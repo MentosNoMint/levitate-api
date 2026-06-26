@@ -62,9 +62,9 @@ export default function LogsTab() {
 
   const getStatusText = (status: number, statusText: string) => {
     if (status === 200) return "200 OK";
-    if (status === 429) return language === "en" ? "429 Rate Limit" : "429 Лимит запросов";
-    if (status === 401) return language === "en" ? "401 Unauthorized" : "401 Не авторизован";
-    return language === "en" ? "503 Service Unavailable" : "503 Сервис недоступен";
+    if (status === 429) return t.logs.err_rate_limit;
+    if (status === 401) return t.logs.err_unauthorized;
+    return t.logs.err_unavailable;
   };
 
   const hasNoKeys = virtualKeys.length === 0;
@@ -308,7 +308,7 @@ export default function LogsTab() {
           <div className="flex flex-col items-center justify-center py-8 gap-3 text-[var(--text-muted)]">
             <Loader2 className="w-8 h-8 animate-spin text-[var(--primary)]" />
             <span className="text-sm font-medium">
-              {language === "en" ? "Executing request on upstream AI..." : "Выполняется запрос к оригинальной ИИ..."}
+              {t.logs.msg_executing}
             </span>
           </div>
         )}
@@ -317,7 +317,7 @@ export default function LogsTab() {
         {error && (
           <div className="mt-4 p-4 bg-red-950/20 border border-red-500/30 text-red-400 rounded-[var(--radius-md)] text-xs break-all">
             <p className="font-semibold mb-1">
-              {language === "en" ? "Error occurred:" : "Произошла ошибка:"}
+              {t.logs.msg_error}
             </p>
             <p className="font-mono">{error}</p>
           </div>
@@ -356,7 +356,7 @@ export default function LogsTab() {
                   renderResponseContent(result.response)
                 ) : (
                   <span className="text-[var(--text-muted)] italic">
-                    {language === "en" ? "[Empty Response]" : "[Пустой ответ]"}
+                    {t.logs.msg_empty_response}
                   </span>
                 )}
               </div>
