@@ -16,6 +16,7 @@ export interface TranslationSchema {
     managed: string;
     byo: string;
     logout: string;
+    unlimited: string;
   };
   layout: {
     overview: string;
@@ -60,7 +61,6 @@ export interface TranslationSchema {
     btn_cancel: string;
     form_title: string;
     form_name: string;
-    form_priority: string;
     form_quota: string;
     form_rpm: string;
     form_btn: string;
@@ -68,13 +68,9 @@ export interface TranslationSchema {
     col_status: string;
     col_usage: string;
     col_rpm: string;
-    col_priority: string;
     col_actions: string;
     usage_tokens: string;
     tokens_suffix: string;
-    high_priority: string;
-    medium_priority: string;
-    low_priority: string;
     aria_save: string;
     aria_cancel: string;
     aria_edit: string;
@@ -199,7 +195,8 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       low: "Low",
       managed: "Managed",
       byo: "BYO",
-      logout: "Sign Out"
+      logout: "Sign Out",
+      unlimited: "Unlimited"
     },
     layout: {
       overview: "Overview",
@@ -244,7 +241,6 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       btn_cancel: "Cancel",
       form_title: "Create API Key",
       form_name: "Key Name",
-      form_priority: "Priority",
       form_quota: "Monthly Budget Limit",
       form_rpm: "Speed Limit (Requests per min)",
       form_btn: "Generate Key",
@@ -252,13 +248,9 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       col_status: "Status",
       col_usage: "Monthly Quota Usage",
       col_rpm: "Rate Limit (RPM)",
-      col_priority: "Priority",
       col_actions: "Actions",
       usage_tokens: "tokens",
       tokens_suffix: "tokens",
-      high_priority: "High Priority",
-      medium_priority: "Medium Priority",
-      low_priority: "Low Priority",
       aria_save: "Save changes",
       aria_cancel: "Cancel editing",
       aria_edit: "Edit budget rules",
@@ -381,7 +373,8 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       low: "Низкий",
       managed: "Управляемый",
       byo: "BYO",
-      logout: "Выйти"
+      logout: "Выйти",
+      unlimited: "Без лимита"
     },
     layout: {
       overview: "Обзор",
@@ -426,7 +419,6 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       btn_cancel: "Отмена",
       form_title: "Создать новый API-ключ",
       form_name: "Название ключа",
-      form_priority: "Приоритет",
       form_quota: "Лимит токенов в месяц",
       form_rpm: "Ограничение скорости (запросов в минуту)",
       form_btn: "Сгенерировать ключ",
@@ -434,13 +426,9 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       col_status: "Статус",
       col_usage: "Использование квоты",
       col_rpm: "Лимит RPM",
-      col_priority: "Приоритет",
       col_actions: "Действия",
       usage_tokens: "токенов",
       tokens_suffix: "токенов",
-      high_priority: "Высокий приоритет",
-      medium_priority: "Средний приоритет",
-      low_priority: "Низкий приоритет",
       aria_save: "Сохранить изменения",
       aria_cancel: "Отменить редактирование",
       aria_edit: "Редактировать лимиты",

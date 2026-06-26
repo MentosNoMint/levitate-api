@@ -8,7 +8,6 @@ export interface VirtualKey {
   monthlyUsage: number;
   monthlyLimit: number;
   rpmLimit: number;
-  priority: "High" | "Medium" | "Low";
   createdAt: string;
 }
 
@@ -158,9 +157,10 @@ interface DashboardState {
   fetchUser: () => Promise<void>;
   logout: () => void;
   fetchData: () => Promise<void>;
-  addVirtualKey: (name: string, monthlyLimit: number, rpmLimit: number, priority: "High" | "Medium" | "Low") => Promise<void>;
+  addVirtualKey: (name: string, monthlyLimit: number, rpmLimit: number) => Promise<void>;
   toggleVirtualKeyStatus: (id: string) => Promise<void>;
   updateVirtualKeyBudget: (id: string, monthlyLimit: number, rpmLimit: number) => Promise<void>;
+  deleteVirtualKey: (id: string) => Promise<void>;
   addCredential: (credential: {
     name: string;
     provider: string;
@@ -327,7 +327,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           monthlyUsage: k.monthly_usage || 0,
           monthlyLimit: k.monthly_token_limit || 0,
           rpmLimit: k.rpm_limit || 0,
-          priority: k.monthly_token_limit && k.monthly_token_limit > 5000000 ? "High" : "Medium",
           createdAt: "",
         }));
       }
@@ -409,15 +408,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  addVirtualKey: async (name, monthlyLimit, rpmLimit, priority) => {
+  addVirtualKey: async (name, monthlyLimit, rpmLimit) => {
     const { token, fetchData } = get();
     try {
       const resp = await apiFetch("/admin/virtual-keys", {
         method: "POST",
         body: JSON.stringify({
           name,
-          monthly_token_limit: monthlyLimit,
-          rpm_limit: rpmLimit,
+          monthly_token_limit: monthlyLimit || null,
+          rpm_limit: rpmLimit || null,
         }),
       }, token);
 
@@ -453,13 +452,25 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       await apiFetch(`/admin/virtual-keys/${id}`, {
         method: "PUT",
         body: JSON.stringify({
-          monthly_token_limit: monthlyLimit,
-          rpm_limit: rpmLimit,
+          monthly_token_limit: monthlyLimit || null,
+          rpm_limit: rpmLimit || null,
         }),
       }, token);
       await fetchData();
     } catch {
       // Ignored budget edit error fallback
+    }
+  },
+
+  deleteVirtualKey: async (id) => {
+    const { token, fetchData } = get();
+    try {
+      await apiFetch(`/admin/virtual-keys/${id}`, {
+        method: "DELETE",
+      }, token);
+      await fetchData();
+    } catch {
+      // Ignored delete error fallback
     }
   },
 

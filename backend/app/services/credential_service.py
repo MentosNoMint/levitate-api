@@ -14,7 +14,7 @@ from app.api.schemas.credential import CredentialCreate, CredentialUpdate
 from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS
 
 async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[str, Any]]:
-    stmt = select(Credential).where(Credential.user_id == user_id)
+    stmt = select(Credential).where(Credential.user_id == user_id).order_by(Credential.name)
     result = await db.execute(stmt)
     creds = result.scalars().all()
     

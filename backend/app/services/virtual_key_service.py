@@ -11,7 +11,7 @@ from app.redis_client import redis_client
 from app.core.constants import get_vkey_tokens_key
 
 async def list_virtual_keys(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[str, Any]]:
-    stmt = select(VirtualKey).where(VirtualKey.user_id == user_id)
+    stmt = select(VirtualKey).where(VirtualKey.user_id == user_id).order_by(VirtualKey.name)
     result = await db.execute(stmt)
     keys = result.scalars().all()
     
@@ -63,7 +63,9 @@ async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: Virt
         raise HTTPException(status_code=404, detail="Virtual Key not found")
 
     for k, v in payload.dict(exclude_unset=True).items():
-        if v is not None:
+        if k in ["monthly_token_limit", "rpm_limit"]:
+            setattr(vkey, k, v)
+        elif v is not None:
             setattr(vkey, k, v)
 
     await db.commit()

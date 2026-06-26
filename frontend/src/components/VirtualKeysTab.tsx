@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useDashboardStore, VirtualKey } from "@/store/dashboardStore";
-import { Plus, ToggleLeft, ToggleRight, Edit2, Check, X, Shield, Copy } from "lucide-react";
+import { Plus, ToggleLeft, ToggleRight, Edit2, Check, X, Copy, Trash2 } from "lucide-react";
 import { translations } from "@/store/translations";
 import { Modal } from "./Modal";
 
@@ -11,6 +11,7 @@ export default function VirtualKeysTab() {
     addVirtualKey,
     toggleVirtualKeyStatus,
     updateVirtualKeyBudget,
+    deleteVirtualKey,
     lastGeneratedKey,
     clearGeneratedKey,
   } = useDashboardStore();
@@ -22,21 +23,28 @@ export default function VirtualKeysTab() {
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyMonthlyLimit, setNewKeyMonthlyLimit] = useState(5000000);
   const [newKeyRpmLimit, setNewKeyRpmLimit] = useState(1200);
-  const [newKeyPriority, setNewKeyPriority] = useState<VirtualKey["priority"]>("Medium");
 
   const [editMonthlyLimit, setEditMonthlyLimit] = useState(0);
   const [editRpmLimit, setEditRpmLimit] = useState(0);
 
   const [copied, setCopied] = useState(false);
 
+  const handleDeleteKey = async (id: string, name: string) => {
+    const confirmText = language === "ru"
+      ? `Вы действительно хотите удалить API-ключ "${name}"?`
+      : `Are you sure you want to delete the API key "${name}"?`;
+    if (window.confirm(confirmText)) {
+      await deleteVirtualKey(id);
+    }
+  };
+
   const handleCreateKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newKeyName.trim()) return;
-    await addVirtualKey(newKeyName, newKeyMonthlyLimit, newKeyRpmLimit, newKeyPriority);
+    await addVirtualKey(newKeyName, newKeyMonthlyLimit, newKeyRpmLimit);
     setNewKeyName("");
     setNewKeyMonthlyLimit(5000000);
     setNewKeyRpmLimit(1200);
-    setNewKeyPriority("Medium");
   };
 
   const handleCloseModal = () => {
@@ -141,21 +149,7 @@ export default function VirtualKeysTab() {
               />
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="key-priority" className="text-xs font-semibold text-[var(--text-muted)]">
-                {t.keys.form_priority}
-              </label>
-              <select
-                id="key-priority"
-                value={newKeyPriority}
-                onChange={(e) => setNewKeyPriority(e.target.value as VirtualKey["priority"])}
-                className="premium-select outline-none"
-              >
-                <option value="High">{t.keys.high_priority}</option>
-                <option value="Medium">{t.keys.medium_priority}</option>
-                <option value="Low">{t.keys.low_priority}</option>
-              </select>
-            </div>
+
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5">
@@ -165,11 +159,11 @@ export default function VirtualKeysTab() {
                 <input
                   id="key-monthly-limit"
                   type="number"
-                  value={newKeyMonthlyLimit}
-                  onChange={(e) => setNewKeyMonthlyLimit(Number(e.target.value))}
+                  value={newKeyMonthlyLimit || ""}
+                  onChange={(e) => setNewKeyMonthlyLimit(e.target.value === "" ? 0 : Number(e.target.value))}
+                  placeholder={language === "ru" ? "0 или пусто для безлимита" : "0 or empty for unlimited"}
                   className="premium-input outline-none"
-                  required
-                  min={1}
+                  min={0}
                 />
               </div>
 
@@ -180,11 +174,11 @@ export default function VirtualKeysTab() {
                 <input
                   id="key-rpm-limit"
                   type="number"
-                  value={newKeyRpmLimit}
-                  onChange={(e) => setNewKeyRpmLimit(Number(e.target.value))}
+                  value={newKeyRpmLimit || ""}
+                  onChange={(e) => setNewKeyRpmLimit(e.target.value === "" ? 0 : Number(e.target.value))}
+                  placeholder={language === "ru" ? "0 или пусто для безлимита" : "0 or empty for unlimited"}
                   className="premium-input outline-none"
-                  required
-                  min={1}
+                  min={0}
                 />
               </div>
             </div>
@@ -209,11 +203,10 @@ export default function VirtualKeysTab() {
         <table className="mc-table">
           <thead>
             <tr>
-              <th className="w-[30%]">{t.keys.col_name}</th>
+              <th className="w-[35%]">{t.keys.col_name}</th>
               <th className="w-[15%]">{t.keys.col_status}</th>
-              <th className="w-[25%]">{t.keys.col_usage}</th>
+              <th className="w-[30%]">{t.keys.col_usage}</th>
               <th className="w-[12%]">{t.keys.col_rpm}</th>
-              <th className="w-[10%]">{t.keys.col_priority}</th>
               <th className="w-[8%] text-right">{t.keys.col_actions}</th>
             </tr>
           </thead>
@@ -258,14 +251,18 @@ export default function VirtualKeysTab() {
                                 value={editMonthlyLimit}
                                 onChange={(e) => setEditMonthlyLimit(Number(e.target.value))}
                                 className="w-24 premium-input px-1.5 py-0.5 text-xs outline-none"
-                                min={1}
+                                min={0}
                               />
                               {t.keys.tokens_suffix}
                             </span>
                           ) : (
-                            `${(key.monthlyUsage / 1000000).toFixed(2)}M / ${(
-                              key.monthlyLimit / 1000000
-                            ).toFixed(1)}M ${t.keys.tokens_suffix}`
+                            key.monthlyLimit > 0 ? (
+                              `${(key.monthlyUsage / 1000000).toFixed(2)}M / ${(
+                                key.monthlyLimit / 1000000
+                              ).toFixed(1)}M ${t.keys.tokens_suffix}`
+                            ) : (
+                              `${(key.monthlyUsage / 1000000).toFixed(2)}M / ${t.common.unlimited}`
+                            )
                           )}
                         </span>
                       </div>
@@ -290,18 +287,13 @@ export default function VirtualKeysTab() {
                         value={editRpmLimit}
                         onChange={(e) => setEditRpmLimit(Number(e.target.value))}
                         className="w-20 premium-input px-1.5 py-0.5 text-xs outline-none"
-                        min={1}
+                        min={0}
                       />
                     ) : (
-                      `${key.rpmLimit.toLocaleString()} RPM`
+                      key.rpmLimit > 0 ? `${key.rpmLimit.toLocaleString()} RPM` : t.common.unlimited
                     )}
                   </td>
-                  <td>
-                    <span className="flex items-center gap-1 text-[var(--mc-muted)] text-sm">
-                      <Shield className="w-3.5 h-3.5" />
-                      {t.common[key.priority.toLowerCase() as "high" | "medium" | "low"]}
-                    </span>
-                  </td>
+
                   <td className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       {isEditing ? (
@@ -340,6 +332,13 @@ export default function VirtualKeysTab() {
                             ) : (
                               <ToggleLeft className="w-6 h-6" />
                             )}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteKey(key.id, key.name)}
+                            className="p-2 text-[var(--text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--bg-panel-hover)] rounded-md focus-ring"
+                            title={language === "ru" ? "Удалить ключ" : "Delete key"}
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </>
                       )}
