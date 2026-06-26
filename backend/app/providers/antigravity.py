@@ -15,6 +15,11 @@ from app.db.session import AsyncSessionLocal
 from app.db.models import Credential
 from app.core.constants import get_credential_access_token_key
 
+GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
+    "ANTIGRAVITY_CLOUD_CODE_ENDPOINT", 
+    "https://daily-cloudcode-pa.googleapis.com"
+)
+
 def _antigravity_headers(token: str) -> dict:
     return {
         "User-Agent": "antigravity/1.15.8 windows/amd64",
@@ -366,7 +371,7 @@ class AntigravityProvider(BaseProvider):
 
         async def response_generator():
             client_timeout = httpx.Timeout(30.0)
-            url = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+            url = f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
             for attempt in range(2):
                 try:
                     token = await self.get_access_token(force_refresh=(attempt > 0))
@@ -775,7 +780,7 @@ class AntigravityProvider(BaseProvider):
         env_project_id = os.getenv("GOOGLE_USER_PROJECT", "levitate-api")
 
         load_resp = await client.post(
-            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:loadCodeAssist",
             headers=headers,
             json={"cloudaicompanionProject": env_project_id}
         )
@@ -789,7 +794,7 @@ class AntigravityProvider(BaseProvider):
                 return project_id
 
         load_resp = await client.post(
-            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:loadCodeAssist",
             headers=headers,
             json={}
         )
@@ -811,7 +816,7 @@ class AntigravityProvider(BaseProvider):
                 return env_project_id
 
         onboard_resp = await client.post(
-            "https://cloudcode-pa.googleapis.com/v1internal:onboardUser",
+            f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:onboardUser",
             headers=headers,
             json={}
         )
@@ -821,7 +826,7 @@ class AntigravityProvider(BaseProvider):
         for i in range(5):
             await asyncio.sleep(1.0)
             load_resp = await client.post(
-                "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+                f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:loadCodeAssist",
                 headers=headers,
                 json={}
             )
@@ -898,6 +903,7 @@ class AntigravityProvider(BaseProvider):
         tier = "unknown"
         load_data = {}
         quota_data = {}
+        uq_data = None
         for attempt in range(2):
             try:
                 access_token = await self.get_access_token(force_refresh=(attempt > 0))
@@ -925,7 +931,7 @@ class AntigravityProvider(BaseProvider):
                 try:
                     project_id = await self._resolve_project_id(client, headers)
                     load_resp = await client.post(
-                        "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+                        f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:loadCodeAssist",
                         headers=headers,
                         json={}
                     )
@@ -937,7 +943,7 @@ class AntigravityProvider(BaseProvider):
                         "project": project_id
                     }
                     quota_resp = await client.post(
-                        "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+                        f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:fetchAvailableModels",
                         headers=headers,
                         json=model_payload
                     )
@@ -945,6 +951,16 @@ class AntigravityProvider(BaseProvider):
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)
                         continue
+                    try:
+                        uq_resp = await client.post(
+                            f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:retrieveUserQuotaSummary",
+                            headers=headers,
+                            json={}
+                        )
+                        if uq_resp.status_code == 200:
+                            uq_data = uq_resp.json()
+                    except Exception as e:
+                        print(f"Error fetching user quota summary inside client block: {e}", flush=True)
                     break
                 except Exception as e:
                     err_str = str(e).lower()
@@ -1062,6 +1078,18 @@ class AntigravityProvider(BaseProvider):
 
                     if min_fraction is None or frac < min_fraction:
                         min_fraction = frac
+
+            # Получаем детальные квоты (недельные, 5-часовые)
+            if uq_data:
+                for group in uq_data.get("groups", []):
+                    for bucket in group.get("buckets", []):
+                        b_id = bucket.get("bucketId")
+                        b_frac = bucket.get("remainingFraction")
+                        if b_id and b_frac is not None:
+                            quota_details[b_id] = float(b_frac)
+                            quota_details[f"{b_id}:reset"] = bucket.get("resetTime")
+                            if min_fraction is None or float(b_frac) < min_fraction:
+                                min_fraction = float(b_frac)
 
             if min_fraction is not None:
                 remaining_fraction = min_fraction

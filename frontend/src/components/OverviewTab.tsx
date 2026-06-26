@@ -235,10 +235,103 @@ export default function OverviewTab() {
                     </span>
                   </td>
                   <td>
-                    {remaining !== null && cred.quotaTotalTokens ? (
+                    {cred.modelQuotas && (cred.modelQuotas["gemini-weekly"] !== undefined || cred.modelQuotas["3p-weekly"] !== undefined) ? (
+                      <div className="flex flex-col gap-1 w-full max-w-[15rem]" onClick={(e) => e.stopPropagation()}>
+                        {/* Gemini */}
+                        {cred.modelQuotas["gemini-weekly"] !== undefined && (() => {
+                          const g5h = cred.modelQuotas["gemini-5h"] !== undefined ? Math.round(cred.modelQuotas["gemini-5h"] * 100) : null;
+                          const gW = cred.modelQuotas["gemini-weekly"] !== undefined ? Math.round(cred.modelQuotas["gemini-weekly"] * 100) : null;
+                          return (
+                            <div className="flex items-center gap-1.5 text-[10px] leading-none">
+                              <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0" title="Gemini Models">
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                                  <path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z" fill={`url(#geminiGradientOverview-${cred.id})`} />
+                                  <defs>
+                                    <linearGradient id={`geminiGradientOverview-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                      <stop offset="0%" stopColor="#1A73E8" />
+                                      <stop offset="50%" stopColor="#8AB4F8" />
+                                      <stop offset="100%" stopColor="#C68BFC" />
+                                    </linearGradient>
+                                  </defs>
+                                </svg>
+                              </div>
+                              <span className="font-semibold text-[var(--text-main)] min-w-[38px] mr-0.5">Gemini:</span>
+                              {g5h !== null && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[var(--text-muted)]">5h</span>
+                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{g5h}%</span>
+                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
+                                    <div className={`h-full ${g5h < 15 ? "bg-[var(--color-danger)]" : g5h < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${g5h}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                              {gW !== null && (
+                                <div className="flex items-center gap-1 ml-1">
+                                  <span className="text-[var(--text-muted)]">W</span>
+                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{gW}%</span>
+                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
+                                    <div className={`h-full ${gW < 15 ? "bg-[var(--color-danger)]" : gW < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${gW}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Claude/GPT */}
+                        {cred.modelQuotas["3p-weekly"] !== undefined && (() => {
+                          const c5h = cred.modelQuotas["3p-5h"] !== undefined ? Math.round(cred.modelQuotas["3p-5h"] * 100) : null;
+                          const cW = cred.modelQuotas["3p-weekly"] !== undefined ? Math.round(cred.modelQuotas["3p-weekly"] * 100) : null;
+                          return (
+                            <div className="flex items-center gap-1.5 text-[10px] leading-none mt-0.5">
+                              <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0" title="Claude & GPT Models">
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                                  <path d="M9 3L10.5 7.5L15 9L10.5 10.5L9 15L7.5 10.5L3 9L7.5 7.5L9 3Z" fill={`url(#anthropicGradientOverview-${cred.id})`} />
+                                  <path d="M17 11L18 14L21 15L18 16L17 19L16 16L13 15L16 14L17 11Z" fill={`url(#anthropicGradientOverview-${cred.id})`} />
+                                  <defs>
+                                    <linearGradient id={`anthropicGradientOverview-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                      <stop offset="0%" stopColor="#F59E0B" />
+                                      <stop offset="100%" stopColor="#D97706" />
+                                    </linearGradient>
+                                  </defs>
+                                </svg>
+                              </div>
+                              <span className="font-semibold text-[var(--text-main)] min-w-[38px] mr-0.5">Other:</span>
+                              {c5h !== null && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[var(--text-muted)]">5h</span>
+                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{c5h}%</span>
+                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
+                                    <div className={`h-full ${c5h < 15 ? "bg-[var(--color-danger)]" : c5h < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${c5h}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                              {cW !== null && (
+                                <div className="flex items-center gap-1 ml-1">
+                                  <span className="text-[var(--text-muted)]">W</span>
+                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{cW}%</span>
+                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
+                                    <div className={`h-full ${cW < 15 ? "bg-[var(--color-danger)]" : cW < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${cW}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                              {cW !== null && (
+                                <div className="flex items-center gap-1 ml-1">
+                                  <span className="text-[var(--text-muted)]">W</span>
+                                  <span className="font-mono font-bold min-w-[22px] text-right text-[var(--text-main)]">{cW}%</span>
+                                  <div className="w-8 h-1 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)]">
+                                    <div className={`h-full ${cW < 15 ? "bg-[var(--color-danger)]" : cW < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${cW}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : remaining !== null && cred.quotaTotalTokens ? (
                       <div className="mc-lat">
                         <span className="mc-mono text-xs">
-                          {remaining.toLocaleString()} / {cred.quotaTotalTokens.toLocaleString()}
+                          {Math.round(pct)}%
                         </span>
                         <span className="mc-bar">
                           <i style={{ width: `${pct}%` }} />

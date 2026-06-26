@@ -466,16 +466,6 @@ export default function CredentialsTab() {
                     const remaining = cred.quotaTotalTokens !== null ? Math.max(0, cred.quotaTotalTokens - cred.quotaUsedTokens) : null;
                     const pct = cred.quotaTotalTokens !== null && cred.quotaTotalTokens > 0 ? Math.max(0, Math.min(100, (remaining! / cred.quotaTotalTokens) * 100)) : 100;
 
-                    const formatRemainingText = (rem: number) => {
-                      const suffix = language === "en" ? "left" : "осталось";
-                      if (rem >= 1000000) {
-                        return `${(rem / 1000000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M ${suffix}`;
-                      } else if (rem >= 1000) {
-                        return `${(rem / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })}k ${suffix}`;
-                      }
-                      return `${rem} ${suffix}`;
-                    };
-
                     return (
                       <React.Fragment key={cred.id}>
                         <tr
@@ -519,11 +509,95 @@ export default function CredentialsTab() {
                             </span>
                           </td>
                           <td>
-                            {remaining !== null && cred.quotaTotalTokens !== null && cred.quotaTotalTokens > 0 ? (
+                            {cred.modelQuotas && (cred.modelQuotas["gemini-weekly"] !== undefined || cred.modelQuotas["3p-weekly"] !== undefined) ? (
+                              <div className="flex flex-col gap-1 w-full max-w-[15rem]" onClick={(e) => e.stopPropagation()}>
+                                {/* Gemini */}
+                                {cred.modelQuotas["gemini-weekly"] !== undefined && (() => {
+                                  const g5h = cred.modelQuotas["gemini-5h"] !== undefined ? Math.round(cred.modelQuotas["gemini-5h"] * 100) : null;
+                                  const gW = cred.modelQuotas["gemini-weekly"] !== undefined ? Math.round(cred.modelQuotas["gemini-weekly"] * 100) : null;
+                                  return (
+                                    <div className="flex items-center gap-1.5 text-[10px] leading-none">
+                                      <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0" title="Gemini Models">
+                                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                                          <path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z" fill={`url(#geminiGradient-${cred.id})`} />
+                                          <defs>
+                                            <linearGradient id={`geminiGradient-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                              <stop offset="0%" stopColor="#1A73E8" />
+                                              <stop offset="50%" stopColor="#8AB4F8" />
+                                              <stop offset="100%" stopColor="#C68BFC" />
+                                            </linearGradient>
+                                          </defs>
+                                        </svg>
+                                      </div>
+                                      <span className="font-semibold text-[var(--mc-text)] min-w-[38px] mr-0.5">Gemini:</span>
+                                      {g5h !== null && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[var(--mc-muted)]">5h</span>
+                                          <span className="font-mono font-bold min-w-[22px] text-right text-[var(--mc-text)]">{g5h}%</span>
+                                          <div className="w-8 h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
+                                            <div className={`h-full ${g5h < 15 ? "bg-[var(--mc-danger)]" : g5h < 40 ? "bg-[var(--mc-warn)]" : "bg-[var(--mc-ok)]"}`} style={{ width: `${g5h}%` }} />
+                                          </div>
+                                        </div>
+                                      )}
+                                      {gW !== null && (
+                                        <div className="flex items-center gap-1 ml-1">
+                                          <span className="text-[var(--mc-muted)]">W</span>
+                                          <span className="font-mono font-bold min-w-[22px] text-right text-[var(--mc-text)]">{gW}%</span>
+                                          <div className="w-8 h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
+                                            <div className={`h-full ${gW < 15 ? "bg-[var(--mc-danger)]" : gW < 40 ? "bg-[var(--mc-warn)]" : "bg-[var(--mc-ok)]"}`} style={{ width: `${gW}%` }} />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Claude/GPT */}
+                                {cred.modelQuotas["3p-weekly"] !== undefined && (() => {
+                                  const c5h = cred.modelQuotas["3p-5h"] !== undefined ? Math.round(cred.modelQuotas["3p-5h"] * 100) : null;
+                                  const cW = cred.modelQuotas["3p-weekly"] !== undefined ? Math.round(cred.modelQuotas["3p-weekly"] * 100) : null;
+                                  return (
+                                    <div className="flex items-center gap-1.5 text-[10px] leading-none mt-0.5">
+                                      <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0" title="Claude & GPT Models">
+                                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                                          <path d="M9 3L10.5 7.5L15 9L10.5 10.5L9 15L7.5 10.5L3 9L7.5 7.5L9 3Z" fill={`url(#anthropicGradient-${cred.id})`} />
+                                          <path d="M17 11L18 14L21 15L18 16L17 19L16 16L13 15L16 14L17 11Z" fill={`url(#anthropicGradient-${cred.id})`} />
+                                          <defs>
+                                            <linearGradient id={`anthropicGradient-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                              <stop offset="0%" stopColor="#F59E0B" />
+                                              <stop offset="100%" stopColor="#D97706" />
+                                            </linearGradient>
+                                          </defs>
+                                        </svg>
+                                      </div>
+                                      <span className="font-semibold text-[var(--mc-text)] min-w-[38px] mr-0.5">Other:</span>
+                                      {c5h !== null && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[var(--mc-muted)]">5h</span>
+                                          <span className="font-mono font-bold min-w-[22px] text-right text-[var(--mc-text)]">{c5h}%</span>
+                                          <div className="w-8 h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
+                                            <div className={`h-full ${c5h < 15 ? "bg-[var(--mc-danger)]" : c5h < 40 ? "bg-[var(--mc-warn)]" : "bg-[var(--mc-ok)]"}`} style={{ width: `${c5h}%` }} />
+                                          </div>
+                                        </div>
+                                      )}
+                                      {cW !== null && (
+                                        <div className="flex items-center gap-1 ml-1">
+                                          <span className="text-[var(--mc-muted)]">W</span>
+                                          <span className="font-mono font-bold min-w-[22px] text-right text-[var(--mc-text)]">{cW}%</span>
+                                          <div className="w-8 h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
+                                            <div className={`h-full ${cW < 15 ? "bg-[var(--mc-danger)]" : cW < 40 ? "bg-[var(--mc-warn)]" : "bg-[var(--mc-ok)]"}`} style={{ width: `${cW}%` }} />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            ) : remaining !== null && cred.quotaTotalTokens !== null && cred.quotaTotalTokens > 0 ? (
                               <div className="flex flex-col gap-1 w-full max-w-[12rem]" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex justify-between items-center gap-2 text-[0.6875rem] font-mono text-[var(--mc-muted)]">
-                                  <span>{Math.round(pct)}%</span>
-                                  <span className="whitespace-nowrap">{formatRemainingText(remaining)}</span>
+                                  <span>{language === "en" ? "Remaining:" : "Осталось:"}</span>
+                                  <span className="whitespace-nowrap font-bold text-[var(--mc-text)]">{Math.round(pct)}%</span>
                                 </div>
                                 <div className="w-full h-1 bg-[var(--mc-subtle)] rounded-full overflow-hidden border border-[var(--mc-border)]">
                                   <div
@@ -797,29 +871,135 @@ export default function CredentialsTab() {
                                       </div>
                                     </div>
                                   )}
-                                  {cred.quotaTotalTokens !== null && cred.quotaTotalTokens > 0 && (
-                                    <div className="flex flex-col gap-1.5 p-3.5 bg-[var(--bg-app)] border border-[var(--border)] rounded-[var(--radius-md)]">
-                                      <div className="flex justify-between items-center text-xs font-bold text-[var(--text-main)]">
-                                        <span>{language === "en" ? "Overall Account Quota" : "Общая квота аккаунта"}</span>
-                                        <span>
-                                          {cred.status === "error" ? 0 : Math.max(0, cred.quotaTotalTokens - cred.quotaUsedTokens).toLocaleString()} / {cred.quotaTotalTokens.toLocaleString()}
-                                        </span>
-                                      </div>
-                                      {(() => {
-                                        const pctQuota = cred.status === "error" ? 0 : Math.round((Math.max(0, cred.quotaTotalTokens - cred.quotaUsedTokens) / cred.quotaTotalTokens) * 100);
-                                        let barColor = "bg-[var(--color-success)]";
-                                        if (pctQuota < 15) barColor = "bg-[var(--color-danger)]";
-                                        else if (pctQuota < 40) barColor = "bg-[var(--color-warning)]";
-                                        return (
-                                          <div className="w-full h-1.5 bg-[var(--bg-subtle)] rounded-full overflow-hidden border border-[var(--border)] mt-1">
-                                            <div className={`h-full ${barColor}`} style={{ width: `${pctQuota}%` }} />
-                                          </div>
-                                        );
-                                      })()}
-                                    </div>
-                                  )}
 
-                                  {modelsToShow && modelsToShow.length > 0 && (
+                                   {/* Недельные и 5-часовые лимиты Antigravity */}
+                                   {cred.modelQuotas && (cred.modelQuotas["gemini-weekly"] !== undefined || cred.modelQuotas["3p-weekly"] !== undefined) && (
+                                     <div className="flex flex-col gap-3 p-3.5 bg-[var(--bg-app)] border border-[var(--border)] rounded-[var(--radius-md)]">
+                                       <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                                         {language === "en" ? "Antigravity Usage Limits" : "Лимиты использования Antigravity"}
+                                       </div>
+                                       
+                                       {/* Группа Gemini */}
+                                       {cred.modelQuotas["gemini-weekly"] !== undefined && (
+                                         <div className="flex flex-col gap-2 p-2.5 bg-[var(--bg-subtle)] rounded-[var(--radius-sm)] border border-[var(--border)]">
+                                           <div className="text-xs font-bold text-[var(--text-main)] flex items-center gap-1.5">
+                                             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+                                               <path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z" fill={`url(#geminiGradientExpanded-${cred.id})`} />
+                                               <defs>
+                                                 <linearGradient id={`geminiGradientExpanded-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                                   <stop offset="0%" stopColor="#1A73E8" />
+                                                   <stop offset="50%" stopColor="#8AB4F8" />
+                                                   <stop offset="100%" stopColor="#C68BFC" />
+                                                 </linearGradient>
+                                               </defs>
+                                             </svg>
+                                             <span>Gemini Models (Flash, Pro)</span>
+                                           </div>
+                                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-1">
+                                             {/* 5h */}
+                                             {cred.modelQuotas["gemini-5h"] !== undefined && (() => {
+                                               const val = cred.modelQuotas["gemini-5h"];
+                                               const pct = Math.round(val * 100);
+                                               const reset = cred.modelQuotas["gemini-5h:reset"] as unknown as string | null;
+                                               const countdown = getResetCountdown(reset);
+                                               return (
+                                                 <div className="flex flex-col gap-1.5">
+                                                   <div className="text-[10px] text-[var(--text-muted)] font-semibold flex justify-between leading-none">
+                                                     <span>5-Hour Limit</span>
+                                                     <span className="font-bold text-[var(--text-main)]">{pct}%</span>
+                                                   </div>
+                                                   <div className="w-full h-1.5 bg-[var(--bg-app)] rounded-full overflow-hidden border border-[var(--border)]">
+                                                     <div className={`h-full ${pct < 15 ? "bg-[var(--color-danger)]" : pct < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${pct}%` }} />
+                                                   </div>
+                                                   {countdown && <span className="text-[9px] text-[var(--text-muted)] font-medium leading-none">{countdown}</span>}
+                                                 </div>
+                                               );
+                                             })()}
+                                             {/* Weekly */}
+                                             {cred.modelQuotas["gemini-weekly"] !== undefined && (() => {
+                                               const val = cred.modelQuotas["gemini-weekly"];
+                                               const pct = Math.round(val * 100);
+                                               const reset = cred.modelQuotas["gemini-weekly:reset"] as unknown as string | null;
+                                               const countdown = getResetCountdown(reset);
+                                               return (
+                                                 <div className="flex flex-col gap-1.5">
+                                                   <div className="text-[10px] text-[var(--text-muted)] font-semibold flex justify-between leading-none">
+                                                     <span>Weekly Limit</span>
+                                                     <span className="font-bold text-[var(--text-main)]">{pct}%</span>
+                                                   </div>
+                                                   <div className="w-full h-1.5 bg-[var(--bg-app)] rounded-full overflow-hidden border border-[var(--border)]">
+                                                     <div className={`h-full ${pct < 15 ? "bg-[var(--color-danger)]" : pct < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${pct}%` }} />
+                                                   </div>
+                                                   {countdown && <span className="text-[9px] text-[var(--text-muted)] font-medium leading-none">{countdown}</span>}
+                                                 </div>
+                                               );
+                                             })()}
+                                           </div>
+                                         </div>
+                                       )}
+
+                                       {/* Группа Claude & GPT */}
+                                       {cred.modelQuotas["3p-weekly"] !== undefined && (
+                                         <div className="flex flex-col gap-2 p-2.5 bg-[var(--bg-subtle)] rounded-[var(--radius-sm)] border border-[var(--border)]">
+                                           <div className="text-xs font-bold text-[var(--text-main)] flex items-center gap-1.5">
+                                             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+                                               <path d="M9 3L10.5 7.5L15 9L10.5 10.5L9 15L7.5 10.5L3 9L7.5 7.5L9 3Z" fill={`url(#anthropicGradientExpanded-${cred.id})`} />
+                                               <path d="M17 11L18 14L21 15L18 16L17 19L16 16L13 15L16 14L17 11Z" fill={`url(#anthropicGradientExpanded-${cred.id})`} />
+                                               <defs>
+                                                 <linearGradient id={`anthropicGradientExpanded-${cred.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                                   <stop offset="0%" stopColor="#F59E0B" />
+                                                   <stop offset="100%" stopColor="#D97706" />
+                                                 </linearGradient>
+                                               </defs>
+                                             </svg>
+                                             <span>Claude & GPT Models (Opus, Sonnet, GPT-OSS)</span>
+                                           </div>
+                                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-1">
+                                             {/* 5h */}
+                                             {cred.modelQuotas["3p-5h"] !== undefined && (() => {
+                                               const val = cred.modelQuotas["3p-5h"];
+                                               const pct = Math.round(val * 100);
+                                               const reset = cred.modelQuotas["3p-5h:reset"] as unknown as string | null;
+                                               const countdown = getResetCountdown(reset);
+                                               return (
+                                                 <div className="flex flex-col gap-1.5">
+                                                   <div className="text-[10px] text-[var(--text-muted)] font-semibold flex justify-between leading-none">
+                                                     <span>5-Hour Limit</span>
+                                                     <span className="font-bold text-[var(--text-main)]">{pct}%</span>
+                                                   </div>
+                                                   <div className="w-full h-1.5 bg-[var(--bg-app)] rounded-full overflow-hidden border border-[var(--border)]">
+                                                     <div className={`h-full ${pct < 15 ? "bg-[var(--color-danger)]" : pct < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${pct}%` }} />
+                                                   </div>
+                                                   {countdown && <span className="text-[9px] text-[var(--text-muted)] font-medium leading-none">{countdown}</span>}
+                                                 </div>
+                                               );
+                                             })()}
+                                             {/* Weekly */}
+                                             {cred.modelQuotas["3p-weekly"] !== undefined && (() => {
+                                               const val = cred.modelQuotas["3p-weekly"];
+                                               const pct = Math.round(val * 100);
+                                               const reset = cred.modelQuotas["3p-weekly:reset"] as unknown as string | null;
+                                               const countdown = getResetCountdown(reset);
+                                               return (
+                                                 <div className="flex flex-col gap-1.5">
+                                                   <div className="text-[10px] text-[var(--text-muted)] font-semibold flex justify-between leading-none">
+                                                     <span>Weekly Limit</span>
+                                                     <span className="font-bold text-[var(--text-main)]">{pct}%</span>
+                                                   </div>
+                                                   <div className="w-full h-1.5 bg-[var(--bg-app)] rounded-full overflow-hidden border border-[var(--border)]">
+                                                     <div className={`h-full ${pct < 15 ? "bg-[var(--color-danger)]" : pct < 40 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"}`} style={{ width: `${pct}%` }} />
+                                                   </div>
+                                                   {countdown && <span className="text-[9px] text-[var(--text-muted)] font-medium leading-none">{countdown}</span>}
+                                                 </div>
+                                               );
+                                             })()}
+                                           </div>
+                                         </div>
+                                       )}
+                                     </div>
+                                   )}
+
+                                  {cred.type !== "managed" && modelsToShow && modelsToShow.length > 0 && (
                                     <button
                                       type="button"
                                       onClick={() => setExpandedModels(prev => ({ ...prev, [cred.id]: !prev[cred.id] }))}
@@ -834,7 +1014,7 @@ export default function CredentialsTab() {
                                     </button>
                                   )}
 
-                                  {expandedModels[cred.id] && modelsToShow && modelsToShow.length > 0 && (
+                                  {cred.type !== "managed" && expandedModels[cred.id] && modelsToShow && modelsToShow.length > 0 && (
                                     <div className="flex flex-col gap-4 mt-2 p-4 bg-[var(--bg-app)] border border-[var(--border)] rounded-[var(--radius-md)]">
                                       {modelsToShow.map((model) => {
                                         let pctModel = 100;
@@ -892,7 +1072,7 @@ export default function CredentialsTab() {
                                     </div>
                                   )}
 
-                                  {(!modelsToShow || modelsToShow.length === 0) && (
+                                  {cred.type !== "managed" && (!modelsToShow || modelsToShow.length === 0) && (
                                     <div className="text-xs text-[var(--text-muted)] italic">
                                       {language === "en" ? "No models configured" : "Модели не настроены"}
                                     </div>
