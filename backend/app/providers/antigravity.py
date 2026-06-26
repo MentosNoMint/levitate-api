@@ -897,7 +897,45 @@ class AntigravityProvider(BaseProvider):
 
         self.credential.encrypted_secret = encrypted
 
-    async def fetch_quota(self) -> dict:
+    async def fetch_quota(self, force: bool = False) -> dict:
+        # Кэшируем запросы к квотам Google API на 15 минут, чтобы избежать рейт-лимитов на IP
+        if not force and self.credential.last_check_at:
+            now = datetime.now(timezone.utc)
+            last_check = self.credential.last_check_at
+            if last_check.tzinfo is None:
+                last_check = last_check.replace(tzinfo=timezone.utc)
+            if now - last_check < timedelta(minutes=15):
+                tier = "unknown"
+                load_error = None
+                quota_error = None
+                try:
+                    secret_data = decrypt_secret(self.credential.encrypted_secret)
+                    secret_dict = json.loads(secret_data)
+                    if isinstance(secret_dict, dict):
+                        tier = secret_dict.get("tier", "unknown")
+                        load_error = secret_dict.get("load_error")
+                        quota_error = secret_dict.get("quota_error")
+                except Exception:
+                    pass
+                
+                remaining_fraction = 1.0
+                if self.credential.quota_total_tokens and self.credential.quota_used_tokens is not None:
+                    remaining_fraction = 1 - (self.credential.quota_used_tokens / self.credential.quota_total_tokens)
+                
+                return {
+                    "tier": tier,
+                    "remaining_fraction": remaining_fraction,
+                    "quota_total_tokens": self.credential.quota_total_tokens or 1000000,
+                    "quota_used_tokens": self.credential.quota_used_tokens or 0,
+                    "remaining_pct": round(remaining_fraction * 100, 1),
+                    "reset_at": self.credential.reset_at.isoformat() if self.credential.reset_at else None,
+                    "model_quotas": self.credential.model_quotas or {},
+                    "status": self.credential.status or "active",
+                    "load_error": load_error,
+                    "quota_error": quota_error,
+                    "cached": True
+                }
+
         load_resp = None
         quota_resp = None
         tier = "unknown"

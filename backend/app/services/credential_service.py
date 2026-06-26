@@ -133,7 +133,7 @@ async def test_credential(db: AsyncSession, credential_id: uuid.UUID, user_id: u
     try:
         if cred.type == "antigravity":
             provider = AntigravityProvider(cred)
-            refresh_result = await provider.fetch_quota()
+            refresh_result = await provider.fetch_quota(force=True)
             if "error" in refresh_result or refresh_result.get("status") == "error":
                 err_msg = refresh_result.get("error") or refresh_result.get("load_error") or refresh_result.get("quota_error") or "Failed to connect to Google API"
                 return {"status": "failed", "error": err_msg}
@@ -164,7 +164,7 @@ async def refresh_credential_quota(db: AsyncSession, credential_id: uuid.UUID, u
         )
 
     provider = AntigravityProvider(cred)
-    refresh_result = await provider.fetch_quota()
+    refresh_result = await provider.fetch_quota(force=True)
     return refresh_result
 
 async def refresh_all_quotas(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
@@ -175,7 +175,7 @@ async def refresh_all_quotas(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, 
     results = {}
     for cred in creds:
         provider = AntigravityProvider(cred)
-        res = await provider.fetch_quota()
+        res = await provider.fetch_quota(force=True)
         results[str(cred.id)] = res
         
     return {"status": "success", "results": results}
