@@ -39,6 +39,33 @@ def sanitize_headers(credential_headers: Dict[str, str]) -> Dict[str, str]:
         headers[k.lower()] = v
     return headers
 
+import re
+
+SECRET_PATTERNS = [
+    # OpenAI API Keys
+    re.compile(r"\bsk-[a-zA-Z0-9]{48}\b"),
+    re.compile(r"\bsk-[a-zA-Z0-9]{20,60}\b"),
+    # Anthropic (Claude) API Keys
+    re.compile(r"\bsk-ant-[a-zA-Z0-9-_]{40,150}\b"),
+    # Google API Keys
+    re.compile(r"\bAIza[0-9A-Za-z-_]{35}\b"),
+    # GitHub Personal Access Tokens
+    re.compile(r"\bghp_[a-zA-Z0-9]{36}\b"),
+    re.compile(r"\bgithub_pat_[a-zA-Z0-9_]{36,255}\b"),
+    # Slack Tokens
+    re.compile(r"\bxox[pboar]-[0-9a-zA-Z-]{10,150}\b"),
+    # Private Keys (RSA, SSH, etc.)
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+]
+
+def scan_for_regex_leaks(body: str) -> bool:
+    if not body:
+        return False
+    for pattern in SECRET_PATTERNS:
+        if pattern.search(body):
+            return True
+    return False
+
 def scan_for_leak(headers: Dict[str, str], body: str, secrets: List[str]) -> bool:
     for secret in secrets:
         if not secret or len(secret) < 6:

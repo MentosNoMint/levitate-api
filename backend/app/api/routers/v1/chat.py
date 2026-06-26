@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import VirtualKey, Credential
 from app.crypto.cipher import decrypt_secret
-from app.security.egress import is_safe_url, scan_for_leak
+from app.security.egress import is_safe_url, scan_for_leak, scan_for_regex_leaks
 from app.routing.selector import CredentialSelector
 from app.providers.byo_upstream import BYOUpstreamProvider
 from app.providers.antigravity import AntigravityProvider
@@ -94,9 +94,10 @@ async def chat_completions(
                 exclude_ids.append(str(cred.id))
                 continue
                 
-        if scan_for_leak({}, str(messages), [token]):
-            await CredentialSelector.release(str(cred.id), 0, db)
-            raise HTTPException(status_code=400, detail="Potential secret leak detected in request")
+        if cred.type != "antigravity":
+            if scan_for_leak({}, str(messages), [token]):
+                await CredentialSelector.release(str(cred.id), 0, db)
+                raise HTTPException(status_code=400, detail="Potential secret leak detected in request")
             
         await db.commit()
         is_upstream_error = False
@@ -119,7 +120,7 @@ async def chat_completions(
                 is_upstream_error = False
                 
                 simple_vkey = type("SimpleVKey", (), {"id": vkey.id})()
-                simple_cred = type("SimpleCred", (), {"id": cred.id})()
+                simple_cred = type("SimpleCred", (), {"id": cred.id, "type": cred.type})()
                 return StreamingResponse(
                     usage_service.stream_response_generator(
                         simple_cred, first_chunk, response, raw_secret, simple_vkey, matched_model, None, start_time
@@ -135,9 +136,10 @@ async def chat_completions(
                 )
                 is_upstream_error = False
                 
-                response_str = str(response)
-                if scan_for_leak({}, response_str, [raw_secret]):
-                    raise Exception("Potential secret leak detected in response")
+                if cred.type != "antigravity":
+                    response_str = str(response)
+                    if scan_for_leak({}, response_str, [raw_secret]) or scan_for_regex_leaks(response_str):
+                        raise Exception("Potential secret leak detected in response")
                     
                 usage = getattr(response, "usage", None)
                 tokens_used = usage.total_tokens if usage else 0

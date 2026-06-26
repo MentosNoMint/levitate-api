@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 from app.db.models import VirtualKey, UsageEvent, Credential
 from app.redis_client import redis_client
 from app.routing.selector import CredentialSelector
-from app.security.egress import scan_for_leak
+from app.security.egress import scan_for_leak, scan_for_regex_leaks
 from app.core.constants import get_vkey_rpm_key, get_vkey_tokens_key
 
 async def check_key_limits(vkey: VirtualKey, model_name: str) -> None:
@@ -98,8 +98,9 @@ async def stream_response_generator(
             else:
                 chunk_data = str(chunk)
                 
-            if scan_for_leak({}, chunk_data, [secret_to_scan]):
-                raise Exception("Potential secret leak detected in streaming response")
+            if getattr(cred, "type", None) != "antigravity":
+                if scan_for_leak({}, chunk_data, [secret_to_scan]) or scan_for_regex_leaks(chunk_data):
+                    raise Exception("Potential secret leak detected in streaming response")
                 
             if hasattr(chunk, "usage") and chunk.usage:
                 total_prompt_tokens = chunk.usage.prompt_tokens
