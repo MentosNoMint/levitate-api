@@ -38,7 +38,6 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:password@postgres:5432/gateway
       REDIS_URL: redis://redis:6379/0
-      ENCRYPTION_KEY: vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8=
     env_file:
       - .env
     depends_on:
