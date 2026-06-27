@@ -33,7 +33,7 @@ def sign_user_token(email: str, user_id: str) -> str:
     payload = {
         "email": email,
         "user_id": user_id,
-        "exp": time.time() + 7 * 24 * 3600
+        "exp": time.time() + 30 * 24 * 3600
     }
     data = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     signature = hmac.new(AUTH_SECRET.encode(), data.encode(), hashlib.sha256).digest()
