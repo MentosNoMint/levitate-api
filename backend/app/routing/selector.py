@@ -140,6 +140,15 @@ class CredentialSelector:
                 if cred.type != "antigravity" and cred.quota_total_tokens is not None and (tokens_val + estimated_tokens) > cred.quota_total_tokens:
                     print(f"[DEBUG SELECTOR] Skipped {cred.name} due to token quota limit", flush=True)
                     continue
+                # Per-group quota check for antigravity credentials
+                if cred.type == "antigravity" and cred.model_quotas:
+                    from app.core.constants import get_model_quota_group
+                    group = get_model_quota_group(model_name)
+                    group_key = f"_group:{group}"
+                    group_frac = cred.model_quotas.get(group_key)
+                    if group_frac is not None and group_frac <= 0.0:
+                        print(f"[DEBUG SELECTOR] Skipped {cred.name} due to {group} group quota exhausted (frac={group_frac})", flush=True)
+                        continue
                 
                 candidates.append(cred)
 
@@ -163,7 +172,7 @@ class CredentialSelector:
                     if not selected:
                         selected = candidates[-1]
 
-                booked = await cls._try_book(selected, estimated_tokens)
+                booked = await cls._try_book(selected, estimated_tokens, model_name)
                 print(f"[DEBUG SELECTOR] Attempted booking for {selected.name}: booked={booked}", flush=True)
                 if booked:
                     return selected, matched_model
@@ -173,7 +182,7 @@ class CredentialSelector:
         return None, model_name
 
     @staticmethod
-    async def _try_book(credential: Credential, estimated_tokens: int) -> bool:
+    async def _try_book(credential: Credential, estimated_tokens: int, model_name: str = "") -> bool:
         lock_key = get_lock_credential_key(credential.id)
         concurrency_key = get_credential_concurrency_key(credential.id)
         tokens_key = get_credential_tokens_key(credential.id)
@@ -193,6 +202,13 @@ class CredentialSelector:
                 return False
             if credential.quota_total_tokens is not None and credential.type != "antigravity" and (tokens_val + estimated_tokens) > credential.quota_total_tokens:
                 return False
+            if credential.type == "antigravity" and credential.model_quotas and model_name:
+                from app.core.constants import get_model_quota_group
+                group = get_model_quota_group(model_name)
+                group_key = f"_group:{group}"
+                group_frac = credential.model_quotas.get(group_key)
+                if group_frac is not None and group_frac <= 0.0:
+                    return False
 
             await redis_client.incrby(concurrency_key, 1)
             return True
