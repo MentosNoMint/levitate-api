@@ -1,11 +1,36 @@
-import React from "react";
+import React, { useState } from "react";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { translations } from "@/store/translations";
-import { Sparkles, ArrowRight } from "lucide-react";
+import { Sparkles, ArrowRight, Key, AlertCircle } from "lucide-react";
 
 export default function LoginScreen() {
-  const { language, setLanguage, googleOauthConfigured, mockAuthEnabled } = useDashboardStore();
+  const { language, setLanguage, googleOauthConfigured, mockAuthEnabled, authMethod, loginWithToken } = useDashboardStore();
   const t = translations[language];
+
+  const [tokenInput, setTokenInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleTokenSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenInput.trim()) return;
+
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      await loginWithToken(tokenInput.trim());
+    } catch (err: any) {
+      setLoading(false);
+      const errMsg = err.message || "";
+      if (errMsg.includes("429") || errMsg.includes("Too many")) {
+        setErrorMsg(t.login.error_rate_limited);
+      } else if (errMsg.includes("401") || errMsg.includes("Invalid")) {
+        setErrorMsg(t.login.error_invalid_token);
+      } else {
+        setErrorMsg(t.login.error_generic);
+      }
+    }
+  };
 
   const getApiUrl = (): string => {
     if (typeof window !== "undefined") {
@@ -13,6 +38,9 @@ export default function LoginScreen() {
     }
     return "http://localhost:8000";
   };
+
+  const showGoogle = authMethod === "google" || authMethod === "both";
+  const showToken = authMethod === "token" || authMethod === "both";
 
   return (
     <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-main)] flex flex-col justify-between p-6 relative overflow-hidden font-sans">
@@ -76,28 +104,77 @@ export default function LoginScreen() {
             </div>
 
             <div className="w-full flex flex-col gap-3 mt-4">
-              {googleOauthConfigured ? (
-                <a
-                  href={`${getApiUrl()}/admin/auth/login`}
-                  className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-white hover:bg-neutral-100 text-neutral-900 text-sm font-semibold rounded-[var(--radius-md)] transition-all duration-200 shadow-lg shadow-white/5 active:scale-[0.98] focus-ring"
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path
-                      fill="#EA4335"
-                      d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.555 0-6.438-2.883-6.438-6.438 0-3.555 2.883-6.438 6.438-6.438 1.547 0 2.956.545 4.062 1.455l3.087-3.087C19.014 1.954 15.823 1 12.24 1 5.922 1 1 5.922 1 12.24s4.922 11.24 11.24 11.24c6.318 0 11.24-4.922 11.24-11.24 0-.682-.068-1.364-.205-1.955H12.24Z"
-                    />
-                  </svg>
-                  {t.login.btn_google}
-                </a>
-              ) : (
-                <div className="w-full flex flex-col gap-2 p-3 bg-indigo-500/5 border border-[var(--primary)]/20 rounded-[var(--radius-md)] text-center">
-                  <span className="text-[10px] text-[var(--primary)] font-semibold uppercase tracking-wider">
-                    {t.login.dev_mode_title}
+              {showGoogle && (
+                googleOauthConfigured ? (
+                  <a
+                    href={`${getApiUrl()}/admin/auth/login`}
+                    className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-white hover:bg-neutral-100 text-neutral-900 text-sm font-semibold rounded-[var(--radius-md)] transition-all duration-200 shadow-lg shadow-white/5 active:scale-[0.98] focus-ring"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path
+                        fill="#EA4335"
+                        d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.555 0-6.438-2.883-6.438-6.438 0-3.555 2.883-6.438 6.438-6.438 1.547 0 2.956.545 4.062 1.455l3.087-3.087C19.014 1.954 15.823 1 12.24 1 5.922 1 1 5.922 1 12.24s4.922 11.24 11.24 11.24c6.318 0 11.24-4.922 11.24-11.24 0-.682-.068-1.364-.205-1.955H12.24Z"
+                      />
+                    </svg>
+                    {t.login.btn_google}
+                  </a>
+                ) : (
+                  <div className="w-full flex flex-col gap-2 p-3 bg-indigo-500/5 border border-[var(--primary)]/20 rounded-[var(--radius-md)] text-center">
+                    <span className="text-[10px] text-[var(--primary)] font-semibold uppercase tracking-wider">
+                      {t.login.dev_mode_title}
+                    </span>
+                    <span className="text-[11px] text-[var(--text-muted)]">
+                      {t.login.dev_mode_desc}
+                    </span>
+                  </div>
+                )
+              )}
+
+              {showGoogle && googleOauthConfigured && showToken && (
+                <div className="flex items-center gap-3 my-1 w-full">
+                  <div className="h-[1px] flex-1 bg-[var(--border)] opacity-60" />
+                  <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-semibold">
+                    {language === "ru" ? "или" : "or"}
                   </span>
-                  <span className="text-[11px] text-[var(--text-muted)]">
-                    {t.login.dev_mode_desc}
-                  </span>
+                  <div className="h-[1px] flex-1 bg-[var(--border)] opacity-60" />
                 </div>
+              )}
+
+              {showToken && (
+                <form onSubmit={handleTokenSubmit} className="w-full flex flex-col gap-3">
+                  <div className="relative flex items-center">
+                    <Key className="absolute left-3 w-4 h-4 text-[var(--text-muted)]" />
+                    <input
+                      type="password"
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.target.value)}
+                      placeholder={t.login.token_placeholder}
+                      disabled={loading}
+                      className="w-full pl-9 pr-4 py-3 bg-[var(--bg-subtle)] border border-[var(--border)] rounded-[var(--radius-md)] text-sm text-[var(--text-main)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--primary)] transition-all duration-200"
+                    />
+                  </div>
+
+                  {errorMsg && (
+                    <div className="flex items-start gap-2 p-3 bg-red-500/5 border border-red-500/20 rounded-[var(--radius-md)] text-left">
+                      <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                      <span className="text-xs text-red-400 font-medium">
+                        {errorMsg}
+                      </span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading || !tokenInput.trim()}
+                    className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white text-sm font-semibold rounded-[var(--radius-md)] transition-all duration-200 shadow-lg shadow-orange-500/20 active:scale-[0.98] focus-ring"
+                  >
+                    {loading ? (
+                      <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <span>{t.login.btn_token}</span>
+                    )}
+                  </button>
+                </form>
               )}
 
               {/* Developer login option */}
