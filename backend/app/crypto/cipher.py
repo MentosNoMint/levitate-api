@@ -6,7 +6,12 @@ app_env = os.getenv("APP_ENV", "development").lower()
 _key = os.getenv("ENCRYPTION_KEY")
 
 if app_env == "production":
-    if not _key or _key == "vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8=":
+    if not _key or _key in (
+        "vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8=",
+        "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+        "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE",
+        "01234567890123456789012345678901"
+    ):
         raise RuntimeError("ENCRYPTION_KEY must be securely configured in production mode!")
 else:
     if not _key:

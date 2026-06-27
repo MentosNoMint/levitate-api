@@ -17,7 +17,13 @@ app_env = os.getenv("APP_ENV", "development").lower()
 AUTH_SECRET = os.getenv("AUTH_SECRET") or os.getenv("ENCRYPTION_KEY")
 
 if app_env == "production":
-    if not AUTH_SECRET or AUTH_SECRET in ("dev-auth-secret-key-32-chars-minimum-for-security", "vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8="):
+    if not AUTH_SECRET or AUTH_SECRET in (
+        "dev-auth-secret-key-32-chars-minimum-for-security",
+        "vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8=",
+        "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+        "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE",
+        "01234567890123456789012345678901"
+    ):
         raise RuntimeError("AUTH_SECRET must be securely configured in production mode!")
 else:
     if not AUTH_SECRET:
@@ -92,3 +98,13 @@ async def get_current_user(
             detail="User not found in database"
         )
     return user
+
+async def get_current_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+    return current_user

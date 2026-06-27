@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, get_current_admin
 from app.db.models import User
 from app.api.schemas.credential import CredentialCreate, CredentialUpdate
 from app.api.schemas.virtual_key import VirtualKeyCreate, VirtualKeyUpdate
 from app.services import credential_service, virtual_key_service, stats_service
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_admin)])
 
 @router.get("/credentials")
 async def list_credentials(
