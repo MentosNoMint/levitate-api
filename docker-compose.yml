@@ -35,7 +35,7 @@ services:
       dockerfile: Dockerfile
     # Ports are now handled securely by Traefik (exposed only via internal Docker network)
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT_BINDING:-8000:8000}"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/gateway
       REDIS_URL: redis://redis:6379/0
