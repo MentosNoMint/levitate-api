@@ -186,7 +186,10 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
                 existing_cred.models = DEFAULT_ANTIGRAVITY_MODELS
             await db.commit()
             provider = AntigravityProvider(existing_cred)
-            await provider.fetch_quota()
+            try:
+                await provider.fetch_quota()
+            except Exception as e:
+                print(f"Error fetching quota during OAuth callback: {e}", flush=True)
         else:
             new_cred = Credential(
                 user_id=admin_uuid,
@@ -203,7 +206,10 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
             db.add(new_cred)
             await db.commit()
             provider = AntigravityProvider(new_cred)
-            await provider.fetch_quota()
+            try:
+                await provider.fetch_quota()
+            except Exception as e:
+                print(f"Error fetching quota during OAuth callback: {e}", flush=True)
         
         return f"{FRONTEND_URL}/?google_connect=success"
     else:
