@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,8 @@ router = APIRouter()
 @router.get("/config")
 async def get_auth_config():
     return {
-        "google_oauth_configured": auth_service.get_google_oauth_configured()
+        "google_oauth_configured": auth_service.get_google_oauth_configured(),
+        "mock_auth_enabled": auth_service.ALLOW_MOCK_AUTH
     }
 
 @router.get("/login")
@@ -31,6 +32,11 @@ async def auth_callback(
 
 @router.get("/mock")
 async def auth_mock(db: AsyncSession = Depends(get_db)):
+    if not auth_service.ALLOW_MOCK_AUTH:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Mock authentication is disabled in this environment"
+        )
     url = await auth_service.handle_mock_login(db)
     return RedirectResponse(url=url)
 

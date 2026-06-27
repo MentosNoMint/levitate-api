@@ -28,6 +28,15 @@ ALLOWED_ADMIN_EMAILS = [
     if email.strip()
 ]
 
+# Environment configuration
+app_env = os.getenv("APP_ENV", "").strip().lower()
+env_allow_mock = os.getenv("ALLOW_MOCK_AUTH", "true").strip().lower()
+
+if app_env == "production":
+    ALLOW_MOCK_AUTH = False
+else:
+    ALLOW_MOCK_AUTH = env_allow_mock not in ("false", "0", "no", "off")
+
 def get_google_oauth_configured() -> bool:
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
@@ -39,6 +48,11 @@ def get_login_url(action: Optional[str] = None, token: Optional[str] = None) -> 
         prompt_params = "&access_type=offline&prompt=consent"
     else:
         if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            if not ALLOW_MOCK_AUTH:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="OAuth credentials are not configured"
+                )
             return "/admin/auth/mock"
         client_id = GOOGLE_CLIENT_ID
         scopes = "openid%20email%20profile"
