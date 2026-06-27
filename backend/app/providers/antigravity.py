@@ -145,9 +145,9 @@ class AntigravityProvider(BaseProvider):
         try:
             secret_data = decrypt_secret(self.credential.encrypted_secret)
             secret_dict = json.loads(secret_data)
-            project_id = secret_dict.get("project_id", "levitate-api")
+            project_id = secret_dict.get("project_id") or os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
         except Exception:
-            project_id = "levitate-api"
+            project_id = os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
 
         MODEL_MAPPINGS = {
             "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
