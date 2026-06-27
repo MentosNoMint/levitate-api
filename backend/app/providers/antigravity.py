@@ -1202,16 +1202,45 @@ class AntigravityProvider(BaseProvider):
                             if min_fraction is None or float(b_frac) < min_fraction:
                                 min_fraction = float(b_frac)
 
-            if min_fraction is not None:
-                remaining_fraction = min_fraction
             if earliest_reset:
                 reset_at_val = earliest_reset
 
+        # --- Per-group fraction aggregation ---
+        from app.core.constants import get_model_quota_group
+
+        group_fractions: dict[str, float | None] = {"gemini": None, "others": None}
+
+        for key, frac_val in list(quota_details.items()):
+            if key.endswith(":reset") or key.startswith("_group:"):
+                continue
+            if not isinstance(frac_val, (int, float)):
+                continue
+            group = get_model_quota_group(key)
+            current = group_fractions[group]
+            if current is None or float(frac_val) < current:
+                group_fractions[group] = float(frac_val)
+
+        # Write synthetic group keys
+        for grp, grp_frac in group_fractions.items():
+            if grp_frac is not None:
+                quota_details[f"_group:{grp}"] = grp_frac
+
+        # Compute overall min_fraction (for display / backward compat)
+        known_fracs = [f for f in group_fractions.values() if f is not None]
+        if known_fracs:
+            min_fraction = min(known_fracs)
+
         if remaining_fraction is None:
-            remaining_fraction = 1.0
+            remaining_fraction = min_fraction if min_fraction is not None else 1.0
 
         status_val = "active"
-        if remaining_fraction <= 0.0:
+        # Only set exhausted when ALL known groups are at zero
+        known_groups = {k: v for k, v in group_fractions.items() if v is not None}
+        if known_groups:
+            all_exhausted = all(v <= 0.0 for v in known_groups.values())
+            if all_exhausted:
+                status_val = "exhausted"
+        elif remaining_fraction <= 0.0:
             status_val = "exhausted"
 
         if not load_ok or not quota_ok:
@@ -1219,6 +1248,7 @@ class AntigravityProvider(BaseProvider):
             remaining_fraction = 0.0
             models_list = self.credential.models or []
             quota_details = {m: 0.0 for m in models_list}
+
 
         total_tokens = 1_000_000
         used_tokens = int(total_tokens * (1 - remaining_fraction))
