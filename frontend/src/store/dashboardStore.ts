@@ -196,6 +196,8 @@ interface DashboardState {
 
 const getApiUrl = (): string => {
   if (typeof window !== "undefined") {
+    const envApi = process.env.NEXT_PUBLIC_API_URL;
+    if (envApi) return envApi;
     return window.location.protocol + "//" + window.location.hostname + ":8000";
   }
   return "http://localhost:8000";
