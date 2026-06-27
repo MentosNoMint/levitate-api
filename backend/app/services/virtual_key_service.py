@@ -55,11 +55,14 @@ async def create_virtual_key(db: AsyncSession, payload: VirtualKeyCreate, curren
         "status": "created"
     }
 
-async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: VirtualKeyUpdate) -> Dict[str, Any]:
+async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: VirtualKeyUpdate, current_user_id: uuid.UUID, current_user_role: str) -> Dict[str, Any]:
     stmt = select(VirtualKey).where(VirtualKey.id == vkey_id)
     result = await db.execute(stmt)
     vkey = result.scalar_one_or_none()
     if not vkey:
+        raise HTTPException(status_code=404, detail="Virtual Key not found")
+
+    if vkey.user_id != current_user_id and current_user_role != "admin":
         raise HTTPException(status_code=404, detail="Virtual Key not found")
 
     for k, v in payload.dict(exclude_unset=True).items():
@@ -71,12 +74,16 @@ async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: Virt
     await db.commit()
     return {"status": "updated"}
 
-async def delete_virtual_key(db: AsyncSession, vkey_id: uuid.UUID) -> Dict[str, Any]:
+async def delete_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, current_user_id: uuid.UUID, current_user_role: str) -> Dict[str, Any]:
     stmt = select(VirtualKey).where(VirtualKey.id == vkey_id)
     result = await db.execute(stmt)
     vkey = result.scalar_one_or_none()
     if not vkey:
         raise HTTPException(status_code=404, detail="Virtual Key not found")
+
+    if vkey.user_id != current_user_id and current_user_role != "admin":
+        raise HTTPException(status_code=404, detail="Virtual Key not found")
+
     await db.delete(vkey)
     await db.commit()
     return {"status": "deleted"}

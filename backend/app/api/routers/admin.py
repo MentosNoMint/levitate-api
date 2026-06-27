@@ -77,20 +77,33 @@ async def create_virtual_key(
     return await virtual_key_service.create_virtual_key(db, payload, current_user.id)
 
 @router.put("/virtual-keys/{id}")
-async def update_virtual_key(id: str, payload: VirtualKeyUpdate, db: AsyncSession = Depends(get_db)):
+async def update_virtual_key(
+    id: str,
+    payload: VirtualKeyUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     try:
         vkey_id = uuid.UUID(id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid virtual key ID format")
-    return await virtual_key_service.update_virtual_key(db, vkey_id, payload)
+    return await virtual_key_service.update_virtual_key(
+        db, vkey_id, payload, current_user.id, current_user.role
+    )
 
 @router.delete("/virtual-keys/{id}")
-async def delete_virtual_key(id: str, db: AsyncSession = Depends(get_db)):
+async def delete_virtual_key(
+    id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     try:
         vkey_id = uuid.UUID(id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid virtual key ID format")
-    return await virtual_key_service.delete_virtual_key(db, vkey_id)
+    return await virtual_key_service.delete_virtual_key(
+        db, vkey_id, current_user.id, current_user.role
+    )
 
 @router.get("/stats")
 async def get_stats(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
