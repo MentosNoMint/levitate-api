@@ -11,11 +11,18 @@ from app.workers.worker import start_worker
 from app.db.models import Base
 from app.db.session import engine
 
+import os
+
 app = FastAPI(title="LiteLLM Backend Gateway")
+
+frontend_url = os.getenv("FRONTEND_URL")
+origins = ["http://localhost:3000"]
+if frontend_url:
+    origins.append(frontend_url.strip())
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
