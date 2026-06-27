@@ -42,6 +42,11 @@ export interface TranslationSchema {
     footer: string;
     dev_mode_title: string;
     dev_mode_desc: string;
+    token_placeholder: string;
+    btn_token: string;
+    error_invalid_token: string;
+    error_rate_limited: string;
+    error_generic: string;
   };
   overview: {
     desc: string;
@@ -257,7 +262,12 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       btn_mock: "Developer Login",
       footer: "Secure admin console access",
       dev_mode_title: "Local Development Mode",
-      dev_mode_desc: "Google OAuth keys are not set. Use developer mock login to access dashboard."
+      dev_mode_desc: "Google OAuth keys are not set. Use developer mock login to access dashboard.",
+      token_placeholder: "Enter Admin Token",
+      btn_token: "Login with Token",
+      error_invalid_token: "Invalid admin token.",
+      error_rate_limited: "Too many login attempts. Please try again later.",
+      error_generic: "An error occurred during authentication."
     },
     overview: {
       desc: "System overview, active pools and keys performance.",
@@ -471,7 +481,12 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       btn_mock: "Вход для разработчиков",
       footer: "Безопасный доступ к панели управления",
       dev_mode_title: "Режим локальной разработки",
-      dev_mode_desc: "Ключи Google OAuth не настроены. Используйте вход для разработчиков."
+      dev_mode_desc: "Ключи Google OAuth не настроены. Используйте вход для разработчиков.",
+      token_placeholder: "Введите токен администратора",
+      btn_token: "Войти по токену",
+      error_invalid_token: "Неверный токен администратора.",
+      error_rate_limited: "Слишком много попыток входа. Пожалуйста, попробуйте позже.",
+      error_generic: "Произошла ошибка при авторизации."
     },
     overview: {
       desc: "Сводка по системе: состояние аккаунтов, ключей и лимитов.",

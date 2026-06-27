@@ -144,6 +144,7 @@ interface DashboardState {
   token: string | null;
   googleOauthConfigured: boolean;
   mockAuthEnabled: boolean;
+  authMethod: "google" | "token" | "both";
   virtualKeys: VirtualKey[];
   credentials: Credential[];
   logs: UsageLog[];
@@ -190,6 +191,7 @@ interface DashboardState {
   refreshCredentialQuota: (id: string) => Promise<void>;
   refreshAllQuotas: () => Promise<void>;
   deleteCredential: (id: string) => Promise<void>;
+  loginWithToken: (token: string) => Promise<void>;
 }
 
 const getApiUrl = (): string => {
@@ -222,6 +224,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   token: null,
   googleOauthConfigured: false,
   mockAuthEnabled: true,
+  authMethod: "both",
   virtualKeys: [],
   credentials: [],
   logs: [],
@@ -267,8 +270,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const resp = await apiFetch("/admin/auth/config");
       if (resp.ok) {
-        const data = await resp.json() as { google_oauth_configured: boolean; mock_auth_enabled: boolean };
-        set({ googleOauthConfigured: data.google_oauth_configured, mockAuthEnabled: data.mock_auth_enabled });
+        const data = await resp.json() as { google_oauth_configured: boolean; mock_auth_enabled: boolean; auth_method?: "google" | "token" | "both" };
+        set({
+          googleOauthConfigured: data.google_oauth_configured,
+          mockAuthEnabled: data.mock_auth_enabled,
+          authMethod: data.auth_method || "both"
+        });
       }
     } catch {
       // Ignored config error fallback
@@ -589,6 +596,26 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       await fetchData();
     } catch {
       // Ignored refresh all quotas error fallback
+    }
+  },
+
+  loginWithToken: async (token) => {
+    set({ isAuthLoading: true });
+    try {
+      const resp = await apiFetch("/admin/auth/token-login", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || "Authentication failed");
+      }
+      const data = await resp.json() as { auth_token: string };
+      get().setToken(data.auth_token);
+      await get().fetchUser();
+    } catch (e: any) {
+      set({ isAuthLoading: false });
+      throw e;
     }
   },
 }));
