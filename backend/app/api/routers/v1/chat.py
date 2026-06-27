@@ -355,7 +355,7 @@ class ImageGenerationRequest(BaseModel):
     model: Optional[str] = "gemini-3.1-flash-image"
     n: Optional[int] = 1
     size: Optional[str] = "1024x1024"
-    response_format: Optional[str] = "b64_json"
+    response_format: Optional[str] = "url"
 
 @router.post("/images/generations")
 async def images_generations(
@@ -414,9 +414,17 @@ async def images_generations(
             latency_ms = int((time.time() - start_time) * 1000)
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, response.usage, latency_ms, "success")
             
+            response_format = payload.response_format or "url"
+            data_list = []
+            for img in images[:payload.n]:
+                if response_format == "b64_json":
+                    data_list.append({"b64_json": img})
+                else:
+                    data_list.append({"url": f"data:image/jpeg;base64,{img}"})
+                    
             return {
                 "created": int(time.time()),
-                "data": [{"b64_json": img} for img in images[:payload.n]]
+                "data": data_list
             }
             
         except Exception as e:
