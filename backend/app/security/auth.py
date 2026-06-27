@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.models import User
 
-AUTH_SECRET = os.getenv("ENCRYPTION_KEY", "dev-auth-secret-key-32-chars-minimum-for-security")
+app_env = os.getenv("APP_ENV", "development").lower()
+AUTH_SECRET = os.getenv("AUTH_SECRET") or os.getenv("ENCRYPTION_KEY")
+
+if app_env == "production":
+    if not AUTH_SECRET or AUTH_SECRET in ("dev-auth-secret-key-32-chars-minimum-for-security", "vwW6pdYns-N3IpM4slyoaCUl8hwdY01EizkJvvyytz8="):
+        raise RuntimeError("AUTH_SECRET must be securely configured in production mode!")
+else:
+    if not AUTH_SECRET:
+        AUTH_SECRET = "dev-auth-secret-key-32-chars-minimum-for-security"
 
 def sign_user_token(email: str, user_id: str) -> str:
     payload = {
