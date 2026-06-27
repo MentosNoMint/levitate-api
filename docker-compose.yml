@@ -72,7 +72,7 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
 
   traefik:
-    image: traefik:v3.1
+    image: traefik:latest
     container_name: traefik
     restart: always
     command:
