@@ -21,6 +21,24 @@ from app.core.constants import get_vkey_tokens_key
 
 router = APIRouter()
 
+async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str) -> None:
+    """Mark a specific quota group as exhausted without killing the whole credential."""
+    from app.core.constants import get_model_quota_group
+    group = get_model_quota_group(model_name)
+    group_key = f"_group:{group}"
+
+    quotas = dict(db_cred.model_quotas or {})
+    quotas[group_key] = 0.0
+    db_cred.model_quotas = quotas
+
+    # Only set global exhausted if BOTH groups are known and both at zero
+    gemini_frac = quotas.get("_group:gemini")
+    others_frac = quotas.get("_group:others")
+
+    if gemini_frac is not None and others_frac is not None:
+        if gemini_frac <= 0.0 and others_frac <= 0.0:
+            db_cred.status = "exhausted"
+
 def get_provider(cred: Any) -> Any:
     if cred.type == "antigravity":
         return AntigravityProvider(cred)
@@ -195,7 +213,10 @@ async def chat_completions(
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                 elif is_quota:
-                    db_cred.status = "exhausted"
+                    if db_cred.type == "antigravity":
+                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
+                    else:
+                        db_cred.status = "exhausted"
                 else:
                     db_cred.status = "degraded"
                 await db.commit()
@@ -315,7 +336,10 @@ async def embeddings(
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                 elif is_quota:
-                    db_cred.status = "exhausted"
+                    if db_cred.type == "antigravity":
+                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
+                    else:
+                        db_cred.status = "exhausted"
                 else:
                     db_cred.status = "degraded"
                 await db.commit()
@@ -466,7 +490,10 @@ async def images_generations(
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                 elif is_quota:
-                    db_cred.status = "exhausted"
+                    if db_cred.type == "antigravity":
+                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
+                    else:
+                        db_cred.status = "exhausted"
                 else:
                     db_cred.status = "degraded"
                 await db.commit()
