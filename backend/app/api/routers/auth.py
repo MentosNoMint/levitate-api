@@ -1,7 +1,8 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User
@@ -9,12 +10,27 @@ from app.services import auth_service
 
 router = APIRouter()
 
+class TokenLoginRequest(BaseModel):
+    token: str
+
 @router.get("/config")
 async def get_auth_config():
     return {
         "google_oauth_configured": auth_service.get_google_oauth_configured(),
-        "mock_auth_enabled": auth_service.ALLOW_MOCK_AUTH
+        "mock_auth_enabled": auth_service.ALLOW_MOCK_AUTH,
+        "auth_method": auth_service.AUTH_METHOD
     }
+
+@router.post("/token-login")
+async def auth_token_login(
+    request: Request,
+    payload: TokenLoginRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    client_ip = request.client.host if request.client else "unknown"
+    token = await auth_service.handle_token_login(payload.token, client_ip, db)
+    return {"auth_token": token}
+
 
 @router.get("/login")
 async def auth_login(action: Optional[str] = Query(None), token: Optional[str] = Query(None)):
