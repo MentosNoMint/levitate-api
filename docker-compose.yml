@@ -7,8 +7,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: gateway
-    ports:
-      - "5432:5432"
+    # ports:             # Uncomment only for local dev (e.g. TablePlus/DBeaver access)
+    #   - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +19,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # ports:             # Uncomment only for local dev
+    #   - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
