@@ -10,6 +10,7 @@ from app.api.schemas.virtual_key import VirtualKeyCreate, VirtualKeyUpdate
 from app.redis_client import redis_client
 from app.core.constants import get_vkey_tokens_key
 
+
 async def list_virtual_keys(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[str, Any]]:
     stmt = select(VirtualKey).where(VirtualKey.user_id == user_id).order_by(VirtualKey.name)
     result = await db.execute(stmt)
@@ -33,6 +34,7 @@ async def list_virtual_keys(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[s
         })
     return res
 
+
 async def create_virtual_key(db: AsyncSession, payload: VirtualKeyCreate, current_user_id: uuid.UUID) -> Dict[str, Any]:
     raw_token = f"sk-gateway-{uuid.uuid4().hex}"
     hashed = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -55,7 +57,14 @@ async def create_virtual_key(db: AsyncSession, payload: VirtualKeyCreate, curren
         "status": "created"
     }
 
-async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: VirtualKeyUpdate, current_user_id: uuid.UUID, current_user_role: str) -> Dict[str, Any]:
+
+async def update_virtual_key(
+    db: AsyncSession,
+    vkey_id: uuid.UUID,
+    payload: VirtualKeyUpdate,
+    current_user_id: uuid.UUID,
+    current_user_role: str,
+) -> Dict[str, Any]:
     stmt = select(VirtualKey).where(VirtualKey.id == vkey_id)
     result = await db.execute(stmt)
     vkey = result.scalar_one_or_none()
@@ -65,7 +74,7 @@ async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: Virt
     if vkey.user_id != current_user_id and current_user_role != "admin":
         raise HTTPException(status_code=404, detail="Virtual Key not found")
 
-    for k, v in payload.dict(exclude_unset=True).items():
+    for k, v in payload.model_dump(exclude_unset=True).items():
         if k in ["monthly_token_limit", "rpm_limit"]:
             setattr(vkey, k, v)
         elif v is not None:
@@ -74,7 +83,13 @@ async def update_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, payload: Virt
     await db.commit()
     return {"status": "updated"}
 
-async def delete_virtual_key(db: AsyncSession, vkey_id: uuid.UUID, current_user_id: uuid.UUID, current_user_role: str) -> Dict[str, Any]:
+
+async def delete_virtual_key(
+    db: AsyncSession,
+    vkey_id: uuid.UUID,
+    current_user_id: uuid.UUID,
+    current_user_role: str,
+) -> Dict[str, Any]:
     stmt = select(VirtualKey).where(VirtualKey.id == vkey_id)
     result = await db.execute(stmt)
     vkey = result.scalar_one_or_none()
