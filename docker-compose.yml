@@ -75,6 +75,8 @@ services:
     image: traefik:v2.10
     container_name: traefik
     restart: always
+    environment:
+      - DOCKER_API_VERSION=1.44
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
