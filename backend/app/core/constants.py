@@ -64,3 +64,14 @@ def map_model_name(model_name: str) -> str:
     if "gpt-3" in m:
         return "gemini-3.5-flash-low"
     return model_name
+
+def get_model_quota_group(model_name: str) -> str:
+    """Classify a model into its quota group: 'gemini' or 'others'."""
+    if not model_name:
+        return "others"
+    m = model_name.lower()
+    if m.startswith("gemini") or "gemini" in m:
+        return "gemini"
+    # Claude, GPT-OSS, and everything else falls into "others"
+    return "others"
+
