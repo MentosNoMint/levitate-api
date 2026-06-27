@@ -328,12 +328,34 @@ class AntigravityProvider(BaseProvider):
                 thinking_budget = 2048
             elif effort == "low":
                 thinking_budget = 1024
+        gen_config = {}
         if thinking_budget is not None:
-            if "generationConfig" not in request_body:
-                request_body["generationConfig"] = {}
-            request_body["generationConfig"]["thinkingConfig"] = {
+            gen_config["thinkingConfig"] = {
                 "thinkingBudget": thinking_budget
             }
+        
+        # Map OpenAI parameters to Gemini GenerationConfig
+        max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
+        if max_tokens is not None:
+            gen_config["maxOutputTokens"] = int(max_tokens)
+            
+        temperature = kwargs.get("temperature")
+        if temperature is not None:
+            gen_config["temperature"] = float(temperature)
+            
+        top_p = kwargs.get("top_p")
+        if top_p is not None:
+            gen_config["topP"] = float(top_p)
+            
+        stop = kwargs.get("stop")
+        if stop is not None:
+            if isinstance(stop, str):
+                gen_config["stopSequences"] = [stop]
+            elif isinstance(stop, list):
+                gen_config["stopSequences"] = [str(s) for s in stop]
+
+        if gen_config:
+            request_body["generationConfig"] = gen_config
 
         openai_tools = kwargs.get("tools")
         if openai_tools:
