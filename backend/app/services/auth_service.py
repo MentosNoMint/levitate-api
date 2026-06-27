@@ -22,6 +22,12 @@ ANTIGRAVITY_OAUTH_CLIENT_SECRET = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+ALLOWED_ADMIN_EMAILS = [
+    email.strip().lower() 
+    for email in os.getenv("ALLOWED_ADMIN_EMAILS", "").split(",") 
+    if email.strip()
+]
+
 def get_google_oauth_configured() -> bool:
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
@@ -183,7 +189,8 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
         user = result.scalar_one_or_none()
 
         if not user:
-            user = User(email=email, role="admin")
+            role = "admin" if email.strip().lower() in ALLOWED_ADMIN_EMAILS else "user"
+            user = User(email=email, role=role)
             db.add(user)
             await db.commit()
             await db.refresh(user)
