@@ -72,11 +72,9 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
 
   traefik:
-    image: traefik:v2.10
+    image: traefik:v3.1
     container_name: traefik
     restart: always
-    environment:
-      - DOCKER_API_VERSION=1.44
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
