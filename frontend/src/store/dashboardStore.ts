@@ -143,6 +143,7 @@ interface DashboardState {
   user: UserProfile | null;
   token: string | null;
   googleOauthConfigured: boolean;
+  mockAuthEnabled: boolean;
   virtualKeys: VirtualKey[];
   credentials: Credential[];
   logs: UsageLog[];
@@ -220,6 +221,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   user: null,
   token: null,
   googleOauthConfigured: false,
+  mockAuthEnabled: true,
   virtualKeys: [],
   credentials: [],
   logs: [],
@@ -265,8 +267,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const resp = await apiFetch("/admin/auth/config");
       if (resp.ok) {
-        const data = await resp.json() as { google_oauth_configured: boolean };
-        set({ googleOauthConfigured: data.google_oauth_configured });
+        const data = await resp.json() as { google_oauth_configured: boolean; mock_auth_enabled: boolean };
+        set({ googleOauthConfigured: data.google_oauth_configured, mockAuthEnabled: data.mock_auth_enabled });
       }
     } catch {
       // Ignored config error fallback

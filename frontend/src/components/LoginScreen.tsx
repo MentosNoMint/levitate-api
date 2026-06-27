@@ -4,7 +4,7 @@ import { translations } from "@/store/translations";
 import { Sparkles, ArrowRight } from "lucide-react";
 
 export default function LoginScreen() {
-  const { language, setLanguage, googleOauthConfigured } = useDashboardStore();
+  const { language, setLanguage, googleOauthConfigured, mockAuthEnabled } = useDashboardStore();
   const t = translations[language];
 
   const getApiUrl = (): string => {
@@ -101,13 +101,15 @@ export default function LoginScreen() {
               )}
 
               {/* Developer login option */}
-              <a
-                href={`${getApiUrl()}/admin/auth/mock`}
-                className="w-full flex items-center justify-between py-3 px-4 bg-[var(--bg-subtle)] hover:bg-[var(--bg-panel-hover)] border border-[var(--border)] text-[var(--text-main)] text-sm font-semibold rounded-[var(--radius-md)] transition-all duration-200 hover:border-[var(--border-active)] active:scale-[0.98] group/btn focus-ring"
-              >
-                <span>{t.login.btn_mock}</span>
-                <ArrowRight className="w-4 h-4 text-[var(--text-dark)] group-hover/btn:translate-x-1 group-hover/btn:text-[var(--primary)] transition-all" />
-              </a>
+              {mockAuthEnabled && (
+                <a
+                  href={`${getApiUrl()}/admin/auth/mock`}
+                  className="w-full flex items-center justify-between py-3 px-4 bg-[var(--bg-subtle)] hover:bg-[var(--bg-panel-hover)] border border-[var(--border)] text-[var(--text-main)] text-sm font-semibold rounded-[var(--radius-md)] transition-all duration-200 hover:border-[var(--border-active)] active:scale-[0.98] group/btn focus-ring"
+                >
+                  <span>{t.login.btn_mock}</span>
+                  <ArrowRight className="w-4 h-4 text-[var(--text-dark)] group-hover/btn:translate-x-1 group-hover/btn:text-[var(--primary)] transition-all" />
+                </a>
+              )}
             </div>
           </div>
         </div>
