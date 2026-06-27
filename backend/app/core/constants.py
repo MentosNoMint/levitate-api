@@ -1,14 +1,15 @@
 DEFAULT_ANTIGRAVITY_MODELS = [
     "gemini-3.1-flash-image",
-    "gemini-3.5-flash-extra-low",
+    "gemini-3.5-flash-medium",
     "gemini-3.5-flash-low",
+    "gemini-3.5-flash-high",
     "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-low-high",
-    "gemini-3-flash-agent",
+    "gemini-3.1-pro-low",
     "gemini-3-flash",
-    "gemini-pro-agent",
-    "claude-4.6-opus-thinking",
-    "claude-4.6-sonnet"
+    "gemini-3.1-pro-high",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6-thinking",
+    "gpt-oss-120b-medium"
 ]
 
 REDIS_KEY_VKEY_RPM = "gateway:vkey:{vkey_id}:rpm"
@@ -43,19 +44,23 @@ def map_model_name(model_name: str) -> str:
     if "embedding" in m or m.startswith("text-embedding"):
         return "text-embedding-3-small"
     if "sonnet" in m:
-        return "claude-4.6-sonnet"
+        return "claude-sonnet-4-6-thinking"
     if "opus" in m:
-        return "claude-4.6-opus-thinking"
+        return "claude-opus-4-6-thinking"
+    if "gpt-oss" in m or "gpt_oss" in m:
+        return "gpt-oss-120b-medium"
     if "pro" in m:
         if "high" in m or "agent" in m:
-            return "gemini-pro-agent"
-        return "gemini-3.1-pro-low-high"
+            return "gemini-3.1-pro-high"
+        return "gemini-3.1-pro-low"
     if "flash" in m:
-        if "extra-low" in m or "extra_low" in m:
-            return "gemini-3.5-flash-extra-low"
+        if "medium" in m or "extra-low" in m or "extra_low" in m:
+            return "gemini-3.5-flash-medium"
+        if "high" in m or "agent" in m:
+            return "gemini-3.5-flash-high"
         return "gemini-3.5-flash-low"
     if "gpt-4" in m or "gpt-4o" in m:
-        return "claude-4.6-sonnet"
+        return "claude-sonnet-4-6-thinking"
     if "gpt-3" in m:
         return "gemini-3.5-flash-low"
     return model_name

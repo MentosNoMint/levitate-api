@@ -150,28 +150,32 @@ class AntigravityProvider(BaseProvider):
             project_id = "levitate-api"
 
         MODEL_MAPPINGS = {
-            "Claude 4.6 Sonnet": "claude-sonnet-4-6",
-            "Claude 4.6 Opus (Thinking)": "claude-opus-4-6-thinking",
-            "Gemini 3.5 Flash Low": "gemini-3.5-flash-low",
-            "Gemini 3.5 Flash Extra Low": "gemini-3.5-flash-extra-low",
-            "Gemini 3 Flash": "gemini-3-flash",
+            "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
+            "Claude Opus 4.6 (Thinking)": "claude-opus-4-6-thinking",
+            "Gemini 3.5 Flash (Low)": "gemini-3.5-flash-low",
+            "Gemini 3.5 Flash (Medium)": "gemini-3.5-flash-extra-low",
+            "Gemini 3.5 Flash (High)": "gemini-3-flash-agent",
+            "Gemini 3.1 Pro (Low)": "gemini-3.1-pro-low",
+            "Gemini 3.1 Pro (High)": "gemini-pro-agent",
             "Gemini 3.1 Flash Lite": "gemini-3.1-flash-lite",
             "Gemini 3.1 Flash Image": "gemini-3.1-flash-image",
-            "Gemini 3.1 Pro (Low/High)": "gemini-3.1-pro-low",
-            "Gemini 3.1 Pro (High)": "gemini-pro-agent",
-            "Gemini 3 Flash Agent": "gemini-3-flash-agent",
-            "Gemini Pro Agent": "gemini-pro-agent",
-            "claude-4.6-sonnet": "claude-sonnet-4-6",
-            "claude-4.6-opus-thinking": "claude-opus-4-6-thinking",
+            "Gemini 3 Flash": "gemini-3-flash",
+            "GPT-OSS 120B (Medium)": "gpt-oss-120b-medium",
+            "claude-sonnet-4.6-thinking": "claude-sonnet-4-6",
+            "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
+            "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
+            "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
+            "gemini-3.5-flash-medium": "gemini-3.5-flash-extra-low",
             "gemini-3.5-flash-low": "gemini-3.5-flash-low",
-            "gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
-            "gemini-3-flash": "gemini-3-flash",
+            "gemini-3.5-flash-high": "gemini-3-flash-agent",
             "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+            "gemini-3-flash": "gemini-3-flash",
             "gemini-3.1-flash-image": "gemini-3.1-flash-image",
-            "gemini-3.1-pro-low-high": "gemini-3.1-pro-low",
+            "gemini-3.1-pro-low": "gemini-3.1-pro-low",
             "gemini-3.1-pro-high": "gemini-pro-agent",
             "gemini-3-flash-agent": "gemini-3-flash-agent",
-            "gemini-pro-agent": "gemini-pro-agent"
+            "gemini-pro-agent": "gemini-pro-agent",
+            "gpt-oss-120b-medium": "gpt-oss-120b-medium"
         }
         mapped_model = MODEL_MAPPINGS.get(model)
         if not mapped_model:
