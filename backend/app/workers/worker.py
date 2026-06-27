@@ -105,10 +105,19 @@ async def periodic_health_checks():
                     db_cred = res.scalar_one_or_none()
                     if db_cred:
                         if is_healthy:
-                            if temp_cred.type != "antigravity":
-                                db_cred.status = "active"
+                            if temp_cred.type == "antigravity":
+                                # Antigravity status is managed by fetch_quota, don't overwrite
+                                pass
+                            else:
+                                # Only reset to active from degraded or expired cooldown
+                                # Never overwrite 'exhausted' — that requires quota reset
+                                if db_cred.status == "degraded":
+                                    db_cred.status = "active"
+                                elif db_cred.status == "cooldown" and db_cred.reset_at and now >= db_cred.reset_at:
+                                    db_cred.status = "active"
                         else:
-                            db_cred.status = "degraded"
+                            if temp_cred.type != "antigravity":
+                                db_cred.status = "degraded"
                         db_cred.last_check_at = now
                         await db.commit()
         except Exception:
