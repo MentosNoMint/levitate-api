@@ -33,6 +33,29 @@ class TestFlexibleAuth(IsolatedAsyncioTestCase):
         self.assertIn("auth_method", data)
         self.assertEqual(data["auth_method"], "both")
 
+    async def test_get_config_google_only(self):
+        auth_service.AUTH_METHOD = "google"
+        response = self.client.get("/admin/auth/config")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["auth_method"], "google")
+
+    async def test_get_config_token_only(self):
+        auth_service.AUTH_METHOD = "token"
+        response = self.client.get("/admin/auth/config")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["auth_method"], "token")
+
+    async def test_token_login_disabled_when_google_only(self):
+        auth_service.AUTH_METHOD = "google"
+        response = self.client.post(
+            "/admin/auth/token-login",
+            json={"token": "test-secret-token-12345"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("disabled", response.json()["detail"])
+
     async def test_token_login_success(self):
         response = self.client.post(
             "/admin/auth/token-login",
