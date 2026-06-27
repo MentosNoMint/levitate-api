@@ -32,8 +32,17 @@ ALLOWED_ADMIN_EMAILS = [
 app_env = os.getenv("APP_ENV", "").strip().lower()
 env_allow_mock = os.getenv("ALLOW_MOCK_AUTH", "true").strip().lower()
 
+AUTH_METHOD = os.getenv("AUTH_METHOD", "both").strip().lower()
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+
+if AUTH_METHOD not in ("google", "token", "both"):
+    AUTH_METHOD = "both"
+
 if app_env == "production":
     ALLOW_MOCK_AUTH = False
+    if AUTH_METHOD in ("token", "both"):
+        if not ADMIN_TOKEN or len(ADMIN_TOKEN) < 16:
+            raise RuntimeError("ADMIN_TOKEN must be securely configured and at least 16 characters long in production mode!")
 else:
     ALLOW_MOCK_AUTH = env_allow_mock not in ("false", "0", "no", "off")
 
@@ -227,3 +236,51 @@ async def handle_mock_login(db: AsyncSession) -> str:
 
     token = sign_user_token(email=user.email, user_id=str(user.id))
     return f"{FRONTEND_URL}/?auth_token={token}"
+
+async def handle_token_login(token: str, client_ip: str, db: AsyncSession) -> str:
+    from app.redis_client import redis_client
+    
+    if AUTH_METHOD not in ("token", "both"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token authentication is disabled in this environment."
+        )
+        
+    limit_key = f"rate_limit:login:{client_ip}"
+    current_attempts = await redis_client.get(limit_key)
+    if current_attempts and int(current_attempts) >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later."
+        )
+        
+    await redis_client.incrby(limit_key, 1)
+    await redis_client.expire(limit_key, 60)
+    
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin token."
+        )
+        
+    await redis_client.delete(limit_key)
+    
+    admin_email = ALLOWED_ADMIN_EMAILS[0] if ALLOWED_ADMIN_EMAILS else "admin@levitate.ai"
+    
+    stmt = select(User).where(User.email == admin_email)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        user = User(email=admin_email, role="admin")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    elif user.role != "admin":
+        user.role = "admin"
+        await db.commit()
+        await db.refresh(user)
+        
+    session_token = sign_user_token(email=user.email, user_id=str(user.id))
+    return session_token
+
