@@ -835,15 +835,15 @@ class AntigravityProvider(BaseProvider):
             headers=headers,
             json={"cloudaicompanionProject": env_project_id}
         )
-        if load_resp.status_code in (401, 403):
-            raise Exception(f"Auth error: HTTP {load_resp.status_code}")
         if load_resp.status_code == 200:
             load_data = load_resp.json()
             project_id = load_data.get("cloudaicompanionProject")
             if project_id:
                 await self._save_project_id(project_id)
                 return project_id
-
+        
+        # If the first request with env_project_id failed (e.g. 403 Forbidden because this account
+        # has no access to the env_project_id), try with empty json to let Google resolve the default project.
         load_resp = await client.post(
             f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:loadCodeAssist",
             headers=headers,

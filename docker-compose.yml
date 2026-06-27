@@ -34,8 +34,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     # Ports are now handled securely by Traefik (exposed only via internal Docker network)
-    # ports:
-    #   - "8000:8000"
+    ports:
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/gateway
       REDIS_URL: redis://redis:6379/0
@@ -58,7 +58,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=https://${DOMAIN_BACKEND:-api.localhost}
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
     # Ports are now handled securely by Traefik (exposed only via internal Docker network)
     # ports:
     #   - "3000:3000"
