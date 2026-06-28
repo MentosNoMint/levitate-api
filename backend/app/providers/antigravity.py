@@ -377,6 +377,7 @@ class AntigravityProvider(BaseProvider):
         openai_tools = kwargs.get("tools")
         if openai_tools:
             function_declarations = []
+            has_google_search = False
             for tool in openai_tools:
                 if tool.get("type") == "function":
                     fn = tool.get("function", {})
@@ -386,8 +387,17 @@ class AntigravityProvider(BaseProvider):
                         "description": fn.get("description", ""),
                         "parameters": parameters
                     })
+                elif tool.get("type") in ("google_search", "googleSearchRetrieval", "google_search_retrieval"):
+                    has_google_search = True
+                    
+            tools_payload = []
             if function_declarations:
-                request_body["tools"] = [{"functionDeclarations": function_declarations}]
+                tools_payload.append({"functionDeclarations": function_declarations})
+            if has_google_search:
+                tools_payload.append({"googleSearchRetrieval": {}})
+                
+            if tools_payload:
+                request_body["tools"] = tools_payload
                 
                 openai_tool_choice = kwargs.get("tool_choice")
                 if openai_tool_choice:
