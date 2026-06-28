@@ -25,8 +25,15 @@ class CredentialSelector:
         now = datetime.now(timezone.utc)
 
         async def find_eligible(m_name: str) -> List[Credential]:
+            from sqlalchemy import or_
+            # Antigravity credentials with "exhausted" status may still have
+            # quota in one group (e.g. gemini alive, others exhausted).
+            # The per-group check downstream filters them properly.
             stmt = select(Credential).where(
-                Credential.status == "active",
+                or_(
+                    Credential.status == "active",
+                    (Credential.status == "exhausted") & (Credential.type == "antigravity")
+                ),
                 Credential.user_id == user_id
             )
             if exclude_ids:

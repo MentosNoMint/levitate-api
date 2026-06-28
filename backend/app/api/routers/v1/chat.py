@@ -32,13 +32,19 @@ async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str
     quotas[group_key] = 0.0
     db_cred.model_quotas = quotas
 
-    # Only set global exhausted if BOTH groups are known and both at zero
+    # Determine global status from group fractions
     gemini_frac = quotas.get("_group:gemini")
     others_frac = quotas.get("_group:others")
 
     if gemini_frac is not None and others_frac is not None:
         if gemini_frac <= 0.0 and others_frac <= 0.0:
             db_cred.status = "exhausted"
+        else:
+            # At least one group still has quota → keep credential routable
+            db_cred.status = "active"
+    else:
+        # Only one group is known; don't kill the whole credential
+        db_cred.status = "active"
 
 def get_provider(cred: Any) -> Any:
     if cred.type == "antigravity":
