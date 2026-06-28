@@ -164,28 +164,16 @@ class CredentialSelector:
                 logger.debug("No candidates left in priority group %s", priority)
                 continue
 
-            while candidates:
-                total_weight = sum(c.weight for c in candidates)
-                if total_weight <= 0:
-                    selected = random.choice(candidates)
-                else:
-                    r = random.uniform(0, total_weight)
-                    upto = 0.0
-                    selected = None
-                    for c in candidates:
-                        if upto + c.weight >= r:
-                            selected = c
-                            break
-                        upto += c.weight
-                    if not selected:
-                        selected = candidates[-1]
+            # Deterministic sequential routing to maximize context caching
+            sorted_candidates = sorted(candidates, key=lambda c: str(c.id))
+
+            while sorted_candidates:
+                selected = sorted_candidates.pop(0)
 
                 booked = await cls._try_book(selected, estimated_tokens, model_name)
                 logger.debug("Attempted booking for %s: booked=%s", selected.name, booked)
                 if booked:
                     return selected, matched_model
-                else:
-                    candidates.remove(selected)
 
         return None, model_name
 
