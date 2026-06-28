@@ -394,7 +394,14 @@ class AntigravityProvider(BaseProvider):
             if function_declarations:
                 tools_payload.append({"functionDeclarations": function_declarations})
             if has_google_search:
-                tools_payload.append({"googleSearchRetrieval": {}})
+                tools_payload.append({
+                    "googleSearchRetrieval": {
+                        "dynamicRetrievalConfig": {
+                            "mode": "MODE_DYNAMIC",
+                            "dynamicThreshold": 0.0
+                        }
+                    }
+                })
                 
             if tools_payload:
                 request_body["tools"] = tools_payload

@@ -194,7 +194,7 @@ async def simulate_log(db: AsyncSession, user_id: uuid.UUID, model: str = None, 
         response = await provider.chat_completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200
+            max_tokens=4000
         )
         latency_ms = int((time.time() - start_time) * 1000)
         
