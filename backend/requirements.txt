@@ -95,7 +95,6 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-multipart==0.0.32
 pytz==2025.2
-pywinpty==2.0.15
 PyYAML==6.0.3
 redis==5.3.1
 referencing==0.37.0
