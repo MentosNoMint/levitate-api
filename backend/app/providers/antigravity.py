@@ -1213,14 +1213,12 @@ class AntigravityProvider(BaseProvider):
             remaining_fraction = min_fraction if min_fraction is not None else 1.0
 
         status_val = "active"
-        # Set exhausted when ALL KNOWN groups are at zero.
-        # Unknown groups (None) are ignored — they don't prevent exhaustion.
-        known_groups = {k: v for k, v in group_fractions.items() if v is not None}
-        if known_groups:
-            all_exhausted = all(v <= 0.0 for v in known_groups.values())
-            if all_exhausted:
-                status_val = "exhausted"
-        elif remaining_fraction <= 0.0:
+        # Set exhausted ONLY when ALL groups are known and explicitly at zero.
+        # If any group is unknown (None) or > 0.0, we do not mark as exhausted.
+        all_groups_known = all(v is not None for v in group_fractions.values())
+        if all_groups_known and all(v <= 0.0 for v in group_fractions.values()):
+            status_val = "exhausted"
+        elif not any(v is not None for v in group_fractions.values()) and remaining_fraction <= 0.0:
             status_val = "exhausted"
 
         if not load_ok or not quota_ok:
