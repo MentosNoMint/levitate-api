@@ -1196,12 +1196,14 @@ class AntigravityProvider(BaseProvider):
             remaining_fraction = min_fraction if min_fraction is not None else 1.0
 
         status_val = "active"
-        # Only set exhausted when ALL known groups are at zero
+        # Only set exhausted when ALL POSSIBLY APPLICABLE groups are at zero.
+        # This prevents marking the entire credential exhausted if we only know about one group.
         known_groups = {k: v for k, v in group_fractions.items() if v is not None}
         if known_groups:
-            all_exhausted = all(v <= 0.0 for v in known_groups.values())
-            if all_exhausted:
-                status_val = "exhausted"
+            if len(known_groups) == len(group_fractions):
+                all_exhausted = all(v <= 0.0 for v in known_groups.values())
+                if all_exhausted:
+                    status_val = "exhausted"
         elif remaining_fraction <= 0.0:
             status_val = "exhausted"
 

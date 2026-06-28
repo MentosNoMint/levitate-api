@@ -145,7 +145,11 @@ async def stream_response_generator(
                             db_cred.status = "cooldown"
                             db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                         elif is_quota:
-                            db_cred.status = "exhausted"
+                            if db_cred.type == "antigravity":
+                                from app.api.routers.v1.chat import _mark_antigravity_group_exhausted
+                                await _mark_antigravity_group_exhausted(db_cred, model_name)
+                            else:
+                                db_cred.status = "exhausted"
                         else:
                             db_cred.status = "degraded"
                         await local_db.commit()
