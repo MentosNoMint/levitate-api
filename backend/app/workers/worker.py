@@ -125,7 +125,7 @@ async def periodic_health_checks():
                         await db.commit()
         except Exception as e:
             logger.exception("Error in periodic_health_checks: %s", e)
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
 
 async def periodic_token_refreshes():
     while True:
