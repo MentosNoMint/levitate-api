@@ -3,6 +3,10 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Credential
@@ -17,7 +21,7 @@ class CredentialSelector:
         user_id: uuid.UUID,
         exclude_ids: Optional[List[str]] = None
     ) -> Tuple[List[Credential], str]:
-        print(f"[DEBUG SELECTOR] get_active_credentials: model={model_name} user_id={user_id} exclude={exclude_ids}", flush=True)
+        logger.debug("get_active_credentials: model=%s user_id=%s exclude=%s", model_name, user_id, exclude_ids)
         now = datetime.now(timezone.utc)
 
         async def find_eligible(m_name: str) -> List[Credential]:
@@ -58,7 +62,7 @@ class CredentialSelector:
 
         eligible = await find_eligible(model_name)
         if eligible:
-            print(f"[DEBUG SELECTOR] get_active_credentials found direct matches: {[c.name for c in eligible]}", flush=True)
+            logger.debug("get_active_credentials found direct matches: %s", [c.name for c in eligible])
             return eligible, model_name
 
         from app.core.constants import map_model_name
@@ -66,10 +70,10 @@ class CredentialSelector:
         if mapped_name != model_name:
             eligible = await find_eligible(mapped_name)
             if eligible:
-                print(f"[DEBUG SELECTOR] get_active_credentials found fallback matches for mapped model {mapped_name}: {[c.name for c in eligible]}", flush=True)
+                logger.debug("get_active_credentials found fallback matches for mapped model %s: %s", mapped_name, [c.name for c in eligible])
                 return eligible, mapped_name
 
-        print(f"[DEBUG SELECTOR] get_active_credentials returning empty list", flush=True)
+        logger.debug("get_active_credentials returning empty list")
         return [], model_name
 
     @staticmethod
@@ -132,13 +136,13 @@ class CredentialSelector:
                 concurrency_val = int(curr_concurrency) if curr_concurrency else 0
                 tokens_val = int(curr_tokens) if curr_tokens else cred.quota_used_tokens
 
-                print(f"[DEBUG SELECTOR] Candidate={cred.name} curr_concurrency={concurrency_val} limit={cred.concurrency_limit} curr_tokens={tokens_val} total={cred.quota_total_tokens}", flush=True)
+                logger.debug("Candidate=%s curr_concurrency=%s limit=%s curr_tokens=%s total=%s", cred.name, concurrency_val, cred.concurrency_limit, tokens_val, cred.quota_total_tokens)
 
                 if cred.concurrency_limit is not None and concurrency_val >= cred.concurrency_limit:
-                    print(f"[DEBUG SELECTOR] Skipped {cred.name} due to concurrency limit", flush=True)
+                    logger.debug("Skipped %s due to concurrency limit", cred.name)
                     continue
                 if cred.type != "antigravity" and cred.quota_total_tokens is not None and (tokens_val + estimated_tokens) > cred.quota_total_tokens:
-                    print(f"[DEBUG SELECTOR] Skipped {cred.name} due to token quota limit", flush=True)
+                    logger.debug("Skipped %s due to token quota limit", cred.name)
                     continue
                 # Per-group quota check for antigravity credentials
                 if cred.type == "antigravity" and cred.model_quotas:
@@ -147,13 +151,13 @@ class CredentialSelector:
                     group_key = f"_group:{group}"
                     group_frac = cred.model_quotas.get(group_key)
                     if group_frac is not None and group_frac <= 0.0:
-                        print(f"[DEBUG SELECTOR] Skipped {cred.name} due to {group} group quota exhausted (frac={group_frac})", flush=True)
+                        logger.debug("Skipped %s due to %s group quota exhausted (frac=%s)", cred.name, group, group_frac)
                         continue
                 
                 candidates.append(cred)
 
             if not candidates:
-                print(f"[DEBUG SELECTOR] No candidates left in priority group {priority}", flush=True)
+                logger.debug("No candidates left in priority group %s", priority)
                 continue
 
             while candidates:
@@ -173,7 +177,7 @@ class CredentialSelector:
                         selected = candidates[-1]
 
                 booked = await cls._try_book(selected, estimated_tokens, model_name)
-                print(f"[DEBUG SELECTOR] Attempted booking for {selected.name}: booked={booked}", flush=True)
+                logger.debug("Attempted booking for %s: booked=%s", selected.name, booked)
                 if booked:
                     return selected, matched_model
                 else:
@@ -211,6 +215,7 @@ class CredentialSelector:
                     return False
 
             await redis_client.incrby(concurrency_key, 1)
+            await redis_client.expire(concurrency_key, 120)
             return True
         finally:
             await redis_client.delete(lock_key)

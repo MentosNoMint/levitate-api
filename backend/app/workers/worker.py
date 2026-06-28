@@ -7,6 +7,9 @@ from app.redis_client import redis_client
 from app.providers.byo_upstream import BYOUpstreamProvider
 from app.providers.antigravity import AntigravityProvider
 from app.core.constants import get_credential_tokens_key, get_credential_concurrency_key
+import logging
+
+logger = logging.getLogger(__name__)
 
 async def periodic_quota_resets():
     while True:
@@ -43,8 +46,8 @@ async def periodic_quota_resets():
                             cred.reset_at = None
 
                 await db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Error in periodic_quota_resets: %s", e)
         await asyncio.sleep(10)
 
 async def check_credential_health(cred: Credential) -> bool:
@@ -120,8 +123,8 @@ async def periodic_health_checks():
                                 db_cred.status = "degraded"
                         db_cred.last_check_at = now
                         await db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Error in periodic_health_checks: %s", e)
         await asyncio.sleep(60)
 
 async def periodic_token_refreshes():
@@ -161,8 +164,8 @@ async def periodic_token_refreshes():
                             db_cred.status = "cooldown"
                             db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=5)
                             await db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Error in periodic_token_refreshes: %s", e)
         await asyncio.sleep(600)
 
 async def start_worker():

@@ -3,7 +3,10 @@ import os
 import asyncio
 import httpx
 import litellm
+import logging
 from typing import Any, List, Dict
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import update
 
@@ -22,7 +25,7 @@ GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
 
 def _antigravity_headers(token: str) -> dict:
     return {
-        "User-Agent": "antigravity/1.15.8 windows/amd64",
+        "User-Agent": "antigravity/2.35.0 windows/amd64",
         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
         "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         "Authorization": f"Bearer {token}",
@@ -96,36 +99,50 @@ class AntigravityProvider(BaseProvider):
             if cached_token:
                 return cached_token
 
-        secret_data = decrypt_secret(self.credential.encrypted_secret)
+        lock_key = f"lock:token_refresh:{self.credential.id}"
+        acquired = await redis_client.set(lock_key, "1", ex=15, nx=True)
+        
+        if not acquired:
+            for _ in range(10):
+                await asyncio.sleep(1)
+                cached_token = await redis_client.get(cache_key)
+                if cached_token:
+                    return cached_token
+                    
         try:
-            config = json.loads(secret_data)
-            refresh_token = config.get("refresh_token")
-            client_id = config.get("client_id")
-            client_secret = config.get("client_secret")
-        except Exception:
-            refresh_token = secret_data
-            client_id = None
-            client_secret = None
+            secret_data = decrypt_secret(self.credential.encrypted_secret)
+            try:
+                config = json.loads(secret_data)
+                refresh_token = config.get("refresh_token")
+                client_id = config.get("client_id")
+                client_secret = config.get("client_secret")
+            except Exception:
+                refresh_token = secret_data
+                client_id = None
+                client_secret = None
 
-        if not client_id or not client_secret:
-            client_id = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
-            client_secret = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
+            if not client_id or not client_secret:
+                client_id = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
+                client_secret = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
 
-        async with httpx.AsyncClient() as client:
-            payload = {
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            }
-            if client_id and client_secret:
-                payload["client_id"] = client_id
-                payload["client_secret"] = client_secret
+            async with httpx.AsyncClient() as client:
+                payload = {
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                }
+                if client_id and client_secret:
+                    payload["client_id"] = client_id
+                    payload["client_secret"] = client_secret
 
-            resp = await client.post("https://oauth2.googleapis.com/token", data=payload)
-            resp.raise_for_status()
-            access_token = resp.json()["access_token"]
-            
-        await redis_client.set(cache_key, access_token, ex=3000)
-        return access_token
+                resp = await client.post("https://oauth2.googleapis.com/token", data=payload)
+                resp.raise_for_status()
+                access_token = resp.json()["access_token"]
+                
+            await redis_client.set(cache_key, access_token, ex=3000)
+            return access_token
+        finally:
+            if acquired:
+                await redis_client.delete(lock_key)
 
     async def _trigger_cooldown(self) -> None:
         async with AsyncSessionLocal() as db:
@@ -394,10 +411,10 @@ class AntigravityProvider(BaseProvider):
             "model": mapped_model,
             "request": request_body
         }
-        print("DEBUG_COMPANION_REQUEST_BODY:", json.dumps(body), flush=True)
+        logger.debug("Companion request body: %s", json.dumps(body))
 
         async def response_generator():
-            client_timeout = httpx.Timeout(30.0)
+            client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
             url = f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
             for attempt in range(2):
                 try:
@@ -427,7 +444,7 @@ class AntigravityProvider(BaseProvider):
                                     data_str = line[6:].strip()
                                     if not data_str:
                                         continue
-                                    print("DEBUG_RAW_SSE:", data_str, flush=True)
+                                    logger.debug("Raw SSE: %s", data_str)
                                     try:
                                         chunk_json = json.loads(data_str)
                                     except Exception:
@@ -778,67 +795,12 @@ class AntigravityProvider(BaseProvider):
             )
 
     async def embedding(self, model: str, input_data: Any, **kwargs) -> Any:
-        from litellm import EmbeddingResponse, Usage
-        from litellm.types.utils import Embedding
-        import hashlib
-        import random
-
-        model_lower = model.lower()
-        if "large" in model_lower:
-            dimension = 3072
-        elif "small" in model_lower or "ada" in model_lower:
-            dimension = 1536
-        elif "004" in model_lower:
-            dimension = 768
-        else:
-            dimension = 1536
-
-        inputs = []
-        if isinstance(input_data, str):
-            inputs.append(input_data)
-        elif isinstance(input_data, list):
-            if input_data and isinstance(input_data[0], int):
-                inputs.append(input_data)
-            else:
-                inputs.extend(input_data)
-        else:
-            inputs.append(input_data)
-
-        embedding_objects = []
-        for idx, item in enumerate(inputs):
-            if isinstance(item, (list, tuple)):
-                content_bytes = str(item).encode("utf-8")
-            elif isinstance(item, str):
-                content_bytes = item.encode("utf-8")
-            else:
-                content_bytes = str(item).encode("utf-8")
-
-            hasher = hashlib.md5(content_bytes)
-            seed_int = int(hasher.hexdigest(), 16) % (2**32)
-            rng = random.Random(seed_int)
-            vector = [rng.uniform(-1.0, 1.0) for _ in range(dimension)]
-            norm = sum(x*x for x in vector) ** 0.5
-            if norm > 0:
-                vector = [x / norm for x in vector]
-            else:
-                vector = [0.0] * dimension
-
-            embedding_objects.append(
-                Embedding(
-                    embedding=vector,
-                    index=idx,
-                    object="embedding"
-                )
-            )
-
-        total_tokens = sum(len(str(item).split()) for item in inputs) + len(inputs) * 2
-        total_tokens = max(1, total_tokens)
-
-        return EmbeddingResponse(
-            model=model,
-            data=embedding_objects,
-            object="list",
-            usage=Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=501,
+            detail="Embedding API is not supported through Antigravity provider. "
+                   "Please add a BYO upstream credential with embedding model support "
+                   "(e.g., OpenAI text-embedding-3-small)."
         )
 
     async def _resolve_project_id(self, client: httpx.AsyncClient, headers: dict) -> str:

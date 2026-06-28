@@ -18,6 +18,7 @@ from app.providers.antigravity import AntigravityProvider
 from app.services import usage_service
 from app.redis_client import redis_client
 from app.core.constants import get_vkey_tokens_key
+from app.core.error_classifier import classify_upstream_error
 
 router = APIRouter()
 
@@ -95,7 +96,10 @@ async def chat_completions(
     start_time = time.time()
     last_exception = None
     
-    while True:
+    MAX_RETRIES = 10
+    attempt = 0
+    while attempt < MAX_RETRIES:
+        attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
             db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
         )
@@ -191,19 +195,7 @@ async def chat_completions(
             
             last_exception = e
             
-            err_str = str(e).lower()
-            is_rate_limit = False
-            is_quota = False
-            
-            if hasattr(e, "status_code") and e.status_code == 429:
-                is_rate_limit = True
-            elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
-                is_rate_limit = True
-            elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
-                    is_quota = True
-                else:
-                    is_rate_limit = True
+            is_rate_limit, is_quota = classify_upstream_error(e)
                 
             stmt = select(Credential).where(Credential.id == cred.id)
             result = await db.execute(stmt)
@@ -223,6 +215,12 @@ async def chat_completions(
                 
             exclude_ids.append(str(cred.id))
             continue
+            
+    if last_exception:
+        if hasattr(last_exception, "status_code"):
+            raise last_exception
+        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+    raise HTTPException(status_code=503, detail="No eligible credentials available")
 
 @router.post("/embeddings")
 async def embeddings(
@@ -245,7 +243,10 @@ async def embeddings(
     start_time = time.time()
     last_exception = None
     
-    while True:
+    MAX_RETRIES = 10
+    attempt = 0
+    while attempt < MAX_RETRIES:
+        attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
             db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
         )
@@ -314,19 +315,7 @@ async def embeddings(
             
             last_exception = e
             
-            err_str = str(e).lower()
-            is_rate_limit = False
-            is_quota = False
-            
-            if hasattr(e, "status_code") and e.status_code == 429:
-                is_rate_limit = True
-            elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
-                is_rate_limit = True
-            elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
-                    is_quota = True
-                else:
-                    is_rate_limit = True
+            is_rate_limit, is_quota = classify_upstream_error(e)
                 
             stmt = select(Credential).where(Credential.id == cred.id)
             result = await db.execute(stmt)
@@ -346,6 +335,12 @@ async def embeddings(
                 
             exclude_ids.append(str(cred.id))
             continue
+            
+    if last_exception:
+        if hasattr(last_exception, "status_code"):
+            raise last_exception
+        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+    raise HTTPException(status_code=503, detail="No eligible credentials available")
 
 
 @router.get("/models")
@@ -353,7 +348,7 @@ async def list_models(
     db: AsyncSession = Depends(get_db),
     vkey: VirtualKey = Depends(verify_key)
 ):
-    stmt = select(Credential).where(Credential.status == "active")
+    stmt = select(Credential).where(Credential.status == "active", Credential.user_id == vkey.user_id)
     result = await db.execute(stmt)
     creds = result.scalars().all()
     model_names = set()
@@ -394,7 +389,10 @@ async def images_generations(
     start_time = time.time()
     last_exception = None
     
-    while True:
+    MAX_RETRIES = 10
+    attempt = 0
+    while attempt < MAX_RETRIES:
+        attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
             db, model_name, user_id=vkey.user_id, estimated_tokens=1500, exclude_ids=exclude_ids
         )
@@ -468,19 +466,7 @@ async def images_generations(
             last_exception = e
             exclude_ids.append(str(cred.id))
             
-            err_str = str(e).lower()
-            is_rate_limit = False
-            is_quota = False
-            
-            if hasattr(e, "status_code") and e.status_code == 429:
-                is_rate_limit = True
-            elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
-                is_rate_limit = True
-            elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
-                    is_quota = True
-                else:
-                    is_rate_limit = True
+            is_rate_limit, is_quota = classify_upstream_error(e)
                 
             stmt = select(Credential).where(Credential.id == cred.id)
             result = await db.execute(stmt)
@@ -499,3 +485,9 @@ async def images_generations(
                 await db.commit()
             
             continue
+            
+    if last_exception:
+        if hasattr(last_exception, "status_code"):
+            raise last_exception
+        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+    raise HTTPException(status_code=503, detail="No eligible credentials available")

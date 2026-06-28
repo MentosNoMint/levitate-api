@@ -94,10 +94,15 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
+    ALLOWED_UPDATE_FIELDS = {"name", "provider", "base_url", "models", "quota_total_tokens",
+                              "quota_window", "rpm_limit", "concurrency_limit", "priority", "weight", "status"}
+
     for k, v in payload.dict(exclude_unset=True).items():
         if k == "secret" and v is not None:
             cred.encrypted_secret = encrypt_secret(v)
         elif k == "models" and cred.type == "antigravity":
+            continue
+        elif k not in ALLOWED_UPDATE_FIELDS:
             continue
         elif v is not None:
             setattr(cred, k, v)

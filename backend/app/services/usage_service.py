@@ -12,6 +12,7 @@ from app.redis_client import redis_client
 from app.routing.selector import CredentialSelector
 from app.security.egress import scan_for_leak, scan_for_regex_leaks
 from app.core.constants import get_vkey_rpm_key, get_vkey_tokens_key
+from app.core.error_classifier import classify_upstream_error
 
 async def check_key_limits(vkey: VirtualKey, model_name: str) -> None:
     if vkey.allowed_model_groups:
@@ -134,17 +135,7 @@ async def stream_response_generator(
                 status_str = "success"
                 if stream_error is not None:
                     status_str = "failure"
-                    err_str = str(stream_error).lower()
-                    is_rate_limit = False
-                    is_quota = False
-                    
-                    if "rate limit" in err_str or "429" in err_str or "too many requests" in err_str or "per minute" in err_str:
-                        is_rate_limit = True
-                    elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-                        if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
-                            is_quota = True
-                        else:
-                            is_rate_limit = True
+                    is_rate_limit, is_quota = classify_upstream_error(stream_error)
                         
                     stmt = select(Credential).where(Credential.id == cred.id)
                     result = await local_db.execute(stmt)

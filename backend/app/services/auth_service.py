@@ -12,6 +12,9 @@ from app.security.auth import sign_user_token, verify_user_token
 from app.crypto.cipher import encrypt_secret, decrypt_secret
 from app.providers.antigravity import AntigravityProvider
 from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS
+import logging
+
+logger = logging.getLogger(__name__)
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -189,7 +192,7 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
             try:
                 await provider.fetch_quota()
             except Exception as e:
-                print(f"Error fetching quota during OAuth callback: {e}", flush=True)
+                logger.exception("Error fetching quota during OAuth callback: %s", e)
         else:
             new_cred = Credential(
                 user_id=admin_uuid,
@@ -209,7 +212,7 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
             try:
                 await provider.fetch_quota()
             except Exception as e:
-                print(f"Error fetching quota during OAuth callback: {e}", flush=True)
+                logger.exception("Error fetching quota during OAuth callback: %s", e)
         
         return f"{FRONTEND_URL}/?google_connect=success"
     else:

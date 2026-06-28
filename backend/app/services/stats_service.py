@@ -143,7 +143,7 @@ async def simulate_log(db: AsyncSession, user_id: uuid.UUID, model: str = None, 
         )
 
     # Получаем все активные credentials
-    cred_stmt = select(Credential).where(Credential.status == "active")
+    cred_stmt = select(Credential).where(Credential.status == "active", Credential.user_id == user_id)
     cred_res = await db.execute(cred_stmt)
     creds = cred_res.scalars().all()
 
