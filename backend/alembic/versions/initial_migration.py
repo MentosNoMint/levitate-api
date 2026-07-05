@@ -40,6 +40,7 @@ def upgrade() -> None:
     op.create_table(
         "credentials",
         sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("type", sa.String(length=50), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("provider", sa.String(length=50), nullable=False),
@@ -57,7 +58,15 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=50), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_check_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("model_quotas", sa.JSON(), nullable=True),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        op.f("ix_credentials_user_id"),
+        "credentials",
+        ["user_id"],
+        unique=False,
     )
 
     op.create_table(

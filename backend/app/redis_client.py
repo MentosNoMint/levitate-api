@@ -1,5 +1,8 @@
 import os
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FakeRedis:
     def __init__(self):
@@ -55,72 +58,62 @@ class RedisClientProxy:
     def __init__(self, url):
         self.url = url
         self.real_client = None
-        self.fake_client = None
+        self.fake_client = FakeRedis()
         self.use_fake = False
         try:
             import redis.asyncio as aioredis
             self.real_client = aioredis.from_url(url, decode_responses=True)
-        except Exception:
+        except Exception as e:
+            logger.error("Failed to initialize real Redis client: %s. Using FakeRedis.", e)
             self.use_fake = True
-            self.fake_client = FakeRedis()
-
-    def _get_client(self):
-        if self.use_fake:
-            return self.fake_client
-        return self.real_client
 
     async def get(self, key):
-        try:
-            if not self.use_fake:
+        if not self.use_fake:
+            try:
                 return await self.real_client.get(key)
-        except Exception:
-            self._fallback_to_fake()
+            except Exception as e:
+                logger.warning("Transient Redis GET error: %s. Falling back to FakeRedis.", e)
         return await self.fake_client.get(key)
 
     async def set(self, key, value, ex=None, nx=False):
-        try:
-            if not self.use_fake:
+        if not self.use_fake:
+            try:
                 return await self.real_client.set(key, value, ex=ex, nx=nx)
-        except Exception:
-            self._fallback_to_fake()
+            except Exception as e:
+                logger.warning("Transient Redis SET error: %s. Falling back to FakeRedis.", e)
         return await self.fake_client.set(key, value, ex=ex, nx=nx)
 
     async def delete(self, key):
-        try:
-            if not self.use_fake:
+        if not self.use_fake:
+            try:
                 return await self.real_client.delete(key)
-        except Exception:
-            self._fallback_to_fake()
+            except Exception as e:
+                logger.warning("Transient Redis DELETE error: %s. Falling back to FakeRedis.", e)
         return await self.fake_client.delete(key)
 
     async def incrby(self, key, amount):
-        try:
-            if not self.use_fake:
+        if not self.use_fake:
+            try:
                 return await self.real_client.incrby(key, amount)
-        except Exception:
-            self._fallback_to_fake()
+            except Exception as e:
+                logger.warning("Transient Redis INCRBY error: %s. Falling back to FakeRedis.", e)
         return await self.fake_client.incrby(key, amount)
 
     async def decrby(self, key, amount):
-        try:
-            if not self.use_fake:
+        if not self.use_fake:
+            try:
                 return await self.real_client.decrby(key, amount)
-        except Exception:
-            self._fallback_to_fake()
+            except Exception as e:
+                logger.warning("Transient Redis DECRBY error: %s. Falling back to FakeRedis.", e)
         return await self.fake_client.decrby(key, amount)
 
     async def expire(self, key, seconds):
-        try:
-            if not self.use_fake:
-                return await self.real_client.expire(key, seconds)
-        except Exception:
-            self._fallback_to_fake()
-        return await self.fake_client.expire(key, seconds)
-
-    def _fallback_to_fake(self):
         if not self.use_fake:
-            self.use_fake = True
-            self.fake_client = FakeRedis()
+            try:
+                return await self.real_client.expire(key, seconds)
+            except Exception as e:
+                logger.warning("Transient Redis EXPIRE error: %s. Falling back to FakeRedis.", e)
+        return await self.fake_client.expire(key, seconds)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = RedisClientProxy(REDIS_URL)

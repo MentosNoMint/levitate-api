@@ -274,7 +274,7 @@ async def handle_token_login(token: str, client_ip: str, db: AsyncSession) -> st
         
     await redis_client.delete(limit_key)
     
-    admin_email = ALLOWED_ADMIN_EMAILS[0] if ALLOWED_ADMIN_EMAILS else "admin@levitate.ai"
+    admin_email = "dev-user@levitate.ai" if app_env != "production" else (ALLOWED_ADMIN_EMAILS[0] if ALLOWED_ADMIN_EMAILS else "admin@levitate.ai")
     
     stmt = select(User).where(User.email == admin_email)
     result = await db.execute(stmt)

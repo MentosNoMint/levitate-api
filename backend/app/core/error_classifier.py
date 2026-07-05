@@ -12,14 +12,11 @@ def classify_upstream_error(error: Exception) -> tuple[bool, bool]:
     is_rate_limit = False
     is_quota = False
     
-    if hasattr(error, "status_code") and error.status_code == 429:
+    if "billing" in err_str or "exhausted" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
+        is_quota = True
+    elif hasattr(error, "status_code") and error.status_code == 429:
         is_rate_limit = True
-    elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str:
+    elif "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "per minute" in err_str or "quota" in err_str:
         is_rate_limit = True
-    elif "quota" in err_str or "billing" in err_str or "exhausted" in err_str:
-        if "billing" in err_str or "per day" in err_str or "daily" in err_str or "per-day" in err_str:
-            is_quota = True
-        else:
-            is_rate_limit = True
             
     return is_rate_limit, is_quota

@@ -14,10 +14,13 @@ async def is_safe_url(url: str) -> bool:
         loop = asyncio.get_running_loop()
         addr_info = await loop.getaddrinfo(hostname, None)
         
+        import os
+        allow_local = os.getenv("ALLOW_LOCAL_UPSTREAM", "false").lower() in ("true", "1", "yes", "on")
+        
         for info in addr_info:
             ip_str = info[4][0]
             ip = ipaddress.ip_address(ip_str)
-            if (
+            if not allow_local and (
                 ip.is_private
                 or ip.is_loopback
                 or ip.is_link_local
