@@ -32,17 +32,20 @@ def _antigravity_headers(token: str) -> dict:
         "Content-Type": "application/json",
     }
 
-def convert_schema_to_gemini(schema: Any) -> Any:
+def convert_schema_to_gemini(schema: Any, is_properties_dict: bool = False) -> Any:
     if isinstance(schema, dict):
         new_schema = {}
+        allowed_keys = {"type", "format", "description", "nullable", "enum", "items", "properties", "required"}
         for k, v in schema.items():
+            if not is_properties_dict and k not in allowed_keys:
+                continue
             if k == "type" and isinstance(v, str):
                 new_schema[k] = v.upper()
             else:
-                new_schema[k] = convert_schema_to_gemini(v)
+                new_schema[k] = convert_schema_to_gemini(v, is_properties_dict=(k == "properties"))
         return new_schema
     elif isinstance(schema, list):
-        return [convert_schema_to_gemini(x) for x in schema]
+        return [convert_schema_to_gemini(x, is_properties_dict) for x in schema]
     return schema
 
 class AntigravityProvider(BaseProvider):
@@ -384,12 +387,14 @@ class AntigravityProvider(BaseProvider):
             for tool in openai_tools:
                 if tool.get("type") == "function":
                     fn = tool.get("function", {})
-                    parameters = convert_schema_to_gemini(fn.get("parameters", {}))
-                    function_declarations.append({
+                    tool_def = {
                         "name": fn.get("name"),
-                        "description": fn.get("description", ""),
-                        "parameters": parameters
-                    })
+                        "description": fn.get("description", "")
+                    }
+                    raw_params = fn.get("parameters", {})
+                    if raw_params and raw_params.get("properties"):
+                        tool_def["parameters"] = convert_schema_to_gemini(raw_params)
+                    function_declarations.append(tool_def)
                 elif tool.get("type") in ("google_search", "googleSearchRetrieval", "google_search_retrieval"):
                     has_google_search = True
                     
@@ -432,6 +437,11 @@ class AntigravityProvider(BaseProvider):
             "request": request_body
         }
         logger.debug("Companion request body: %s", json.dumps(body))
+        try:
+            with open("/app/debug.log", "a") as f:
+                f.write(f"MODEL: {model} kwargs: {json.dumps(kwargs)}\nBODY: {json.dumps(body)}\n")
+        except Exception:
+            pass
 
         async def response_generator():
             client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
@@ -454,6 +464,7 @@ class AntigravityProvider(BaseProvider):
                                 raise httpx.HTTPStatusError("Auth error", request=response.request, response=response)
                             if response.status_code != 200:
                                 body_text = await response.aread()
+                                logger.error("Google API Error %s: %s", response.status_code, body_text.decode())
                                 raise Exception(f"HTTP {response.status_code}: {body_text.decode()}")
                             chat_id = f"chatcmpl-{uuid.uuid4()}"
                             created_time = int(time.time())
