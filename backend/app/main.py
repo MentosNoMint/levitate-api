@@ -45,3 +45,31 @@ app.include_router(admin_router, prefix="/admin")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+from fastapi.responses import RedirectResponse
+
+@app.get("/version")
+async def get_version():
+    return {"version": "1.40.0"}
+
+
+@app.get("/props")
+async def get_props():
+    return {"props": {}}
+
+
+@app.get("/api/tags")
+async def get_ollama_tags():
+    return {"models": []}
+
+
+@app.post("/api/show")
+async def post_ollama_show():
+    return {}
+
+
+@app.get("/api/v1/models")
+async def get_api_v1_models():
+    return RedirectResponse(url="/v1/models")
+

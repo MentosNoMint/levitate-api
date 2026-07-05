@@ -408,6 +408,11 @@ async def retrieve_model(
     }
 
 
+@router.get("/props")
+async def get_props_v1():
+    return {"props": {}}
+
+
 class ImageGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-3.1-flash-image"
