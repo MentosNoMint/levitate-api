@@ -373,6 +373,41 @@ async def list_models(
     return {"object": "list", "data": data}
 
 
+@router.get("/models/{model:path}")
+async def retrieve_model(
+    model: str,
+    db: AsyncSession = Depends(get_db),
+    vkey: VirtualKey = Depends(verify_key)
+):
+    stmt = select(Credential).where(Credential.status == "active", Credential.user_id == vkey.user_id)
+    result = await db.execute(stmt)
+    creds = result.scalars().all()
+    model_names = set()
+    for c in creds:
+        if c.models:
+            for m in c.models:
+                model_names.add(m)
+    
+    matched_model = None
+    for name in model_names:
+        if name.lower() == model.lower():
+            matched_model = name
+            break
+            
+    if not matched_model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Model '{model}' not found or inactive"
+        )
+        
+    return {
+        "id": matched_model,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "levitate"
+    }
+
+
 class ImageGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-3.1-flash-image"
