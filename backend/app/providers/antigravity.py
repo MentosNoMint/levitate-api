@@ -325,26 +325,29 @@ class AntigravityProvider(BaseProvider):
         if system_instruction:
             request_body["systemInstruction"] = system_instruction
 
+        supports_thinking = "thinking" in mapped_model.lower() or "thinking" in model.lower()
         thinking_budget = None
-        if "thinking" in mapped_model or "thinking" in model:
+        
+        if supports_thinking:
             thinking_budget = 2048
-        if "thinking" in kwargs:
-            client_thinking = kwargs.get("thinking")
-            if isinstance(client_thinking, dict):
-                if client_thinking.get("type") == "enabled" or client_thinking.get("type") is True:
-                    thinking_budget = client_thinking.get("budget_tokens") or thinking_budget
-            elif isinstance(client_thinking, bool) and client_thinking:
-                thinking_budget = thinking_budget or 2048
-        if "thinking_budget" in kwargs:
-            thinking_budget = kwargs.get("thinking_budget") or thinking_budget
-        if "reasoning_effort" in kwargs:
-            effort = kwargs.get("reasoning_effort")
-            if effort == "high":
-                thinking_budget = 4096
-            elif effort == "medium":
-                thinking_budget = 2048
-            elif effort == "low":
-                thinking_budget = 1024
+            if "thinking" in kwargs:
+                client_thinking = kwargs.get("thinking")
+                if isinstance(client_thinking, dict):
+                    if client_thinking.get("type") == "enabled" or client_thinking.get("type") is True:
+                        thinking_budget = client_thinking.get("budget_tokens") or thinking_budget
+                elif isinstance(client_thinking, bool) and client_thinking:
+                    thinking_budget = thinking_budget or 2048
+            if "thinking_budget" in kwargs:
+                thinking_budget = kwargs.get("thinking_budget") or thinking_budget
+            if "reasoning_effort" in kwargs:
+                effort = kwargs.get("reasoning_effort")
+                if effort == "high":
+                    thinking_budget = 4096
+                elif effort == "medium":
+                    thinking_budget = 2048
+                elif effort == "low":
+                    thinking_budget = 1024
+                    
         gen_config = {}
         if thinking_budget is not None:
             gen_config["thinkingConfig"] = {
