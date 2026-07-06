@@ -970,7 +970,7 @@ class AntigravityProvider(BaseProvider):
             last_check = self.credential.last_check_at
             if last_check.tzinfo is None:
                 last_check = last_check.replace(tzinfo=timezone.utc)
-            if now - last_check < timedelta(minutes=15):
+            if now - last_check < timedelta(minutes=15) and self.credential.status in ("active", "exhausted"):
                 tier = "unknown"
                 load_error = None
                 quota_error = None
