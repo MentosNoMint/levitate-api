@@ -371,7 +371,7 @@ class AntigravityProvider(BaseProvider):
         print("DEBUG_COMPANION_REQUEST_BODY:", json.dumps(body), flush=True)
 
         async def response_generator():
-            client_timeout = httpx.Timeout(30.0)
+            client_timeout = httpx.Timeout(90.0, connect=10.0)
             url = f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
             for attempt in range(2):
                 try:
@@ -951,7 +951,7 @@ class AntigravityProvider(BaseProvider):
             last_check = self.credential.last_check_at
             if last_check.tzinfo is None:
                 last_check = last_check.replace(tzinfo=timezone.utc)
-            if now - last_check < timedelta(minutes=15):
+            if now - last_check < timedelta(minutes=15) and self.credential.status in ("active", "exhausted"):
                 tier = "unknown"
                 load_error = None
                 quota_error = None

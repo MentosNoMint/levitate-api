@@ -172,8 +172,10 @@ async def chat_completions(
             last_exception = e
             
             err_str = str(e).lower()
+            err_class = e.__class__.__name__
             is_rate_limit = False
             is_quota = False
+            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
             
             if hasattr(e, "status_code") and e.status_code == 429:
                 is_rate_limit = True
@@ -192,11 +194,13 @@ async def chat_completions(
                 if is_rate_limit:
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    await db.commit()
                 elif is_quota:
                     db_cred.status = "exhausted"
-                else:
+                    await db.commit()
+                elif not is_transient:
                     db_cred.status = "degraded"
-                await db.commit()
+                    await db.commit()
                 
             exclude_ids.append(str(cred.id))
             continue
@@ -292,8 +296,10 @@ async def embeddings(
             last_exception = e
             
             err_str = str(e).lower()
+            err_class = e.__class__.__name__
             is_rate_limit = False
             is_quota = False
+            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
             
             if hasattr(e, "status_code") and e.status_code == 429:
                 is_rate_limit = True
@@ -312,11 +318,13 @@ async def embeddings(
                 if is_rate_limit:
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    await db.commit()
                 elif is_quota:
                     db_cred.status = "exhausted"
-                else:
+                    await db.commit()
+                elif not is_transient:
                     db_cred.status = "degraded"
-                await db.commit()
+                    await db.commit()
                 
             exclude_ids.append(str(cred.id))
             continue
@@ -435,8 +443,10 @@ async def images_generations(
             exclude_ids.append(str(cred.id))
             
             err_str = str(e).lower()
+            err_class = e.__class__.__name__
             is_rate_limit = False
             is_quota = False
+            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
             
             if hasattr(e, "status_code") and e.status_code == 429:
                 is_rate_limit = True
@@ -455,10 +465,12 @@ async def images_generations(
                 if is_rate_limit:
                     db_cred.status = "cooldown"
                     db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    await db.commit()
                 elif is_quota:
                     db_cred.status = "exhausted"
-                else:
+                    await db.commit()
+                elif not is_transient:
                     db_cred.status = "degraded"
-                await db.commit()
+                    await db.commit()
             
             continue
