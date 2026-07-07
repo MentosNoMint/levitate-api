@@ -168,8 +168,10 @@ class AntigravityProvider(BaseProvider):
             project_id = secret_dict.get("project_id") or os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
         except Exception:
             project_id = os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
-
         MODEL_MAPPINGS = {
+            "claude-4.6-sonnet": "claude-sonnet-4-6",
+            "claude-4.6-opus-thinking": "claude-opus-4-6-thinking",
+            "gemini-3.1-pro-low-high": "gemini-pro-agent",
             "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
             "Claude Opus 4.6 (Thinking)": "claude-opus-4-6-thinking",
             "Gemini 3.5 Flash (Low)": "gemini-3.5-flash-low",
@@ -357,10 +359,9 @@ class AntigravityProvider(BaseProvider):
                 "thinkingBudget": thinking_budget
             }
         
-        # Map OpenAI parameters to Gemini GenerationConfig
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
         if max_tokens is not None:
-            gen_config["maxOutputTokens"] = int(max_tokens)
+            gen_config["maxOutputTokens"] = min(int(max_tokens), 8192)
             
         temperature = kwargs.get("temperature")
         if temperature is not None:
