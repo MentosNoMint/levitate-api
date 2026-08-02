@@ -11,6 +11,8 @@ export interface TranslationSchema {
     exhausted: string;
     error: string;
     degraded: string;
+    reauth_required: string;
+    disabled: string;
     high: string;
     medium: string;
     low: string;
@@ -232,6 +234,8 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       exhausted: "Exhausted",
       error: "Error",
       degraded: "Degraded",
+      reauth_required: "Reauth required",
+      disabled: "Disabled",
       high: "High",
       medium: "Medium",
       low: "Low",
@@ -451,6 +455,8 @@ export const translations: Record<"en" | "ru", TranslationSchema> = {
       exhausted: "Исчерпан",
       error: "Ошибка",
       degraded: "Снижен",
+      reauth_required: "Нужна реавторизация",
+      disabled: "Отключён",
       high: "Высокий",
       medium: "Средний",
       low: "Низкий",

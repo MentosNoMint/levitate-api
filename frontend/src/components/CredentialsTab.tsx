@@ -619,11 +619,9 @@ export default function CredentialsTab() {
                             )}
                           </td>
                           <td>
-                            <span className={`mc-pill ${cred.status === "degraded" ? "is-cooldown" : `is-${cred.status}`}`}>
+                            <span className={`mc-pill is-${cred.status}`}>
                               <span className="mc-dot" />
-                              {cred.status === "degraded"
-                                ? t.common.degraded
-                                : (t.common[cred.status as keyof typeof t.common] || cred.status)}
+                              {t.common[cred.status as keyof typeof t.common] || cred.status}
                             </span>
                           </td>
                         </tr>
@@ -783,7 +781,10 @@ export default function CredentialsTab() {
                                             <option value="active">{t.common.active}</option>
                                             <option value="cooldown">{t.common.cooldown}</option>
                                             <option value="exhausted">{t.common.exhausted}</option>
+                                            <option value="degraded">{t.common.degraded}</option>
                                             <option value="error">{t.common.error}</option>
+                                            <option value="reauth_required">{t.common.reauth_required}</option>
+                                            <option value="disabled">{t.common.disabled}</option>
                                           </select>
                                         </div>
                                       </div>

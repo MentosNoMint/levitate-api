@@ -11,7 +11,28 @@ from app.crypto.cipher import encrypt_secret, decrypt_secret
 from app.providers.byo_upstream import BYOUpstreamProvider
 from app.providers.antigravity import AntigravityProvider
 from app.api.schemas.credential import CredentialCreate, CredentialUpdate
-from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS
+from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS, get_credential_access_token_key
+from app.redis_client import redis_client
+
+
+def _derive_display_status(cred: Credential) -> str:
+    """Reconcile UI status with group quotas when DB status lags."""
+    status = cred.status or "active"
+    if status in {"reauth_required", "disabled", "cooldown", "degraded", "error"}:
+        return status
+    quotas = cred.model_quotas or {}
+    if cred.type == "antigravity" and quotas:
+        def _frac(key: str):
+            try:
+                value = quotas.get(key)
+                return None if value is None else float(value)
+            except (TypeError, ValueError):
+                return None
+        gemini = _frac("_group:gemini")
+        others = _frac("_group:others")
+        if gemini is not None and others is not None and gemini <= 0.0 and others <= 0.0:
+            return "exhausted"
+    return status
 
 async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[str, Any]]:
     stmt = select(Credential).where(Credential.user_id == user_id).order_by(Credential.name)
@@ -49,7 +70,7 @@ async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> List[Dict[st
             "concurrency_limit": c.concurrency_limit,
             "priority": c.priority,
             "weight": c.weight,
-            "status": c.status,
+            "status": _derive_display_status(c),
             "expires_at": c.expires_at,
             "last_check_at": c.last_check_at,
             "model_quotas": c.model_quotas,
@@ -96,15 +117,20 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
 
     ALLOWED_UPDATE_FIELDS = {"name", "provider", "base_url", "models", "quota_total_tokens",
                               "quota_window", "rpm_limit", "concurrency_limit", "priority", "weight", "status"}
+    secret_changed = False
+    reactivated = False
 
     for k, v in payload.dict(exclude_unset=True).items():
         if k == "secret" and v is not None:
             cred.encrypted_secret = encrypt_secret(v)
+            secret_changed = True
         elif k == "models" and cred.type == "antigravity":
             continue
         elif k not in ALLOWED_UPDATE_FIELDS:
             continue
         elif v is not None:
+            if k == "status" and v == "active" and cred.status != "active":
+                reactivated = True
             setattr(cred, k, v)
             if k == "quota_window":
                 if v:
@@ -112,10 +138,20 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
                 else:
                     cred.reset_at = None
 
+    if reactivated:
+        cred.reset_at = None
+
     if cred.type == "antigravity":
         cred.models = DEFAULT_ANTIGRAVITY_MODELS
+        if secret_changed or reactivated:
+            cred.model_quotas = {}
+            cred.reset_at = None
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(cred, "model_quotas")
 
     await db.commit()
+    if secret_changed or reactivated:
+        await redis_client.delete(get_credential_access_token_key(cred.id))
     return {"status": "updated"}
 
 async def delete_credential(db: AsyncSession, credential_id: uuid.UUID, user_id: uuid.UUID) -> Dict[str, Any]:

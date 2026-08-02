@@ -737,6 +737,12 @@ input, select, textarea {
 .mc-pill.is-cooldown .mc-dot { background: var(--mc-warn); }
 .mc-pill.is-exhausted { color: var(--mc-neutral); background: color-mix(in srgb, var(--mc-neutral) 14%, transparent); border-color: color-mix(in srgb, var(--mc-neutral) 26%, transparent); }
 .mc-pill.is-exhausted .mc-dot { background: var(--mc-neutral); }
+.mc-pill.is-degraded { color: var(--mc-warn); background: color-mix(in srgb, var(--mc-warn) 14%, transparent); border-color: color-mix(in srgb, var(--mc-warn) 28%, transparent); }
+.mc-pill.is-degraded .mc-dot { background: var(--mc-warn); }
+.mc-pill.is-reauth_required { color: #f97316; background: color-mix(in srgb, #f97316 14%, transparent); border-color: color-mix(in srgb, #f97316 28%, transparent); }
+.mc-pill.is-reauth_required .mc-dot { background: #f97316; }
+.mc-pill.is-disabled { color: var(--mc-neutral); background: color-mix(in srgb, var(--mc-neutral) 18%, transparent); border-color: color-mix(in srgb, var(--mc-neutral) 32%, transparent); opacity: 0.85; }
+.mc-pill.is-disabled .mc-dot { background: var(--mc-neutral); }
 .mc-pill.is-error { color: var(--mc-danger); background: color-mix(in srgb, var(--mc-danger) 12%, transparent); border-color: color-mix(in srgb, var(--mc-danger) 26%, transparent); }
 .mc-pill.is-error .mc-dot { background: var(--mc-danger); box-shadow: 0 0 0.4rem var(--mc-danger); }
 

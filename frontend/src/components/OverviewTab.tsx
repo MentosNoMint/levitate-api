@@ -27,8 +27,16 @@ export default function OverviewTab() {
   const activePct = Math.round((activePools / (totalPools || 1)) * 100);
   const activeKeys = virtualKeys.filter((k) => k.status === "active").length;
 
-  const hasError = credentials.some((c) => c.status === "error");
-  const operational = !hasError;
+  const unhealthyStatuses = new Set([
+    "error",
+    "degraded",
+    "exhausted",
+    "cooldown",
+    "reauth_required",
+    "disabled",
+  ]);
+  const hasUnhealthy = credentials.some((c) => unhealthyStatuses.has(c.status));
+  const operational = !hasUnhealthy;
 
   const historyValues = stats.tokenUsageHistory.map((d) => d.value);
   const sparkLine = sparkPoints(historyValues);
@@ -236,11 +244,9 @@ export default function OverviewTab() {
                     </div>
                   </td>
                   <td>
-                    <span className={`mc-pill ${cred.status === "degraded" ? "is-cooldown" : `is-${cred.status}`}`}>
+                    <span className={`mc-pill is-${cred.status}`}>
                       <span className="mc-dot" />
-                      {cred.status === "degraded"
-                        ? t.common.degraded
-                        : (t.common[cred.status as keyof typeof t.common] || cred.status)}
+                      {t.common[cred.status as keyof typeof t.common] || cred.status}
                     </span>
                   </td>
                   <td>

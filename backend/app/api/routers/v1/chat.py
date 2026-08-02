@@ -1,9 +1,11 @@
-import time
 import hashlib
-from typing import Optional, Any
+import json
+import logging
+import time
+from typing import Any, Mapping, Optional
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,9 +20,15 @@ from app.providers.antigravity import AntigravityProvider
 from app.services import usage_service
 from app.redis_client import redis_client
 from app.core.constants import get_vkey_tokens_key
-from app.core.error_classifier import classify_upstream_error
+from app.core.error_classifier import (
+    UpstreamErrorKind,
+    classify_upstream_error_kind,
+    should_invalidate_session_binding,
+    should_mutate_credential_status,
+)
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str) -> None:
     """Mark a specific quota group as exhausted without killing the whole credential."""
@@ -33,16 +41,120 @@ async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str
     db_cred.model_quotas = quotas
 
     # Determine global status from group fractions
-    gemini_frac = quotas.get("_group:gemini")
-    others_frac = quotas.get("_group:others")
+    def _fraction(value):
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
 
+    gemini_frac = _fraction(quotas.get("_group:gemini"))
+    others_frac = _fraction(quotas.get("_group:others"))
+
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(db_cred, "model_quotas")
+    
     if gemini_frac is not None and others_frac is not None:
         if gemini_frac <= 0.0 and others_frac <= 0.0:
             db_cred.status = "exhausted"
         else:
             db_cred.status = "active"
+            db_cred.reset_at = None
     else:
         db_cred.status = "active"
+        db_cred.reset_at = None
+
+def _canonical_session_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return str(value).strip()
+
+
+def get_session_id(payload: dict, headers: Mapping[str, Any] | None = None) -> Optional[str]:
+    """Resolve a stable client conversation identity without random fallback."""
+    header_values = {str(key).lower(): value for key, value in (headers or {}).items()}
+    for header_name in ("x-session-id", "x-session-affinity", "x-levitate-session-id"):
+        value = _canonical_session_value(header_values.get(header_name, ""))
+        if value:
+            return value[:512]
+
+    for field in ("session_id", "sessionId", "conversation_id", "prompt_cache_key"):
+        value = _canonical_session_value(payload.get(field, ""))
+        if value:
+            return value[:512]
+
+    conversation = payload.get("conversation")
+    if isinstance(conversation, dict):
+        value = _canonical_session_value(conversation.get("id", ""))
+        if value:
+            return value[:512]
+
+    messages = payload.get("messages") or []
+    first_user = next((message for message in messages if isinstance(message, dict) and message.get("role") == "user"), None)
+    if first_user is not None:
+        digest = hashlib.sha256(_canonical_session_value(first_user).encode("utf-8")).hexdigest()
+        return f"first-user-{digest}"
+    return None
+
+async def _handle_credential_failure(
+    db: AsyncSession,
+    vkey: VirtualKey,
+    credential: Credential,
+    session_id: Optional[str],
+    model_name: str,
+    kind: UpstreamErrorKind,
+) -> None:
+    """Apply intentional account state changes only for failover-worthy failures.
+
+    CLIENT / CONFIGURATION / UNKNOWN must not flip account status. Admin
+    ``disabled`` is set only via the admin API, never from upstream errors.
+    """
+    if not should_mutate_credential_status(kind) and not should_invalidate_session_binding(kind):
+        return
+
+    state_token = await CredentialSelector._acquire_credential_state_lock(credential.id)
+    if not state_token:
+        logger.warning("Could not acquire credential state lock for %s", credential.id)
+        return
+    try:
+        if should_invalidate_session_binding(kind):
+            await CredentialSelector.invalidate_binding(
+                db, vkey.user_id, session_id, model_name, provider=credential.type
+            )
+
+        if not should_mutate_credential_status(kind):
+            return
+
+        result = await db.execute(select(Credential).where(Credential.id == credential.id))
+        db_credential = result.scalar_one_or_none()
+        if not db_credential:
+            return
+        await db.refresh(db_credential)
+        if db_credential.status == "exhausted" and kind != UpstreamErrorKind.QUOTA:
+            return
+        if db_credential.status in {"reauth_required", "disabled"} and kind != UpstreamErrorKind.AUTH:
+            return
+
+        if kind == UpstreamErrorKind.AUTH:
+            db_credential.status = "reauth_required"
+            db_credential.reset_at = None
+        elif kind == UpstreamErrorKind.TRANSIENT:
+            # Optional short cooldown only — never exhausted / reauth.
+            db_credential.status = "cooldown"
+            db_credential.reset_at = datetime.now(timezone.utc) + timedelta(seconds=10)
+        elif kind == UpstreamErrorKind.QUOTA:
+            if db_credential.type == "antigravity":
+                await _mark_antigravity_group_exhausted(db_credential, model_name)
+            else:
+                db_credential.status = "exhausted"
+        elif kind == UpstreamErrorKind.RATE_LIMIT:
+            db_credential.status = "cooldown"
+            db_credential.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+        await db.commit()
+    finally:
+        await CredentialSelector._release_credential_state_lock(credential.id, state_token)
+
 
 def get_provider(cred: Any) -> Any:
     if cred.type == "antigravity":
@@ -79,6 +191,7 @@ async def verify_key(
 
 @router.post("/chat/completions")
 async def chat_completions(
+    request: Request,
     payload: dict,
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
@@ -93,6 +206,7 @@ async def chat_completions(
     token = authorization.split(" ")[1]
     exclude_ids = []
     estimated_tokens = 1000
+    session_id = get_session_id(payload, request.headers)
     
     messages = payload.get("messages", [])
     stream = payload.get("stream", False)
@@ -105,7 +219,7 @@ async def chat_completions(
     while attempt < MAX_RETRIES:
         attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
-            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
+            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids, session_id=session_id
         )
         if not cred:
             if last_exception:
@@ -117,6 +231,9 @@ async def chat_completions(
         if cred.base_url:
             if not await is_safe_url(cred.base_url):
                 await CredentialSelector.release(str(cred.id), 0, db)
+                await CredentialSelector.invalidate_binding(
+                    db, vkey.user_id, session_id, matched_model, provider=cred.type
+                )
                 exclude_ids.append(str(cred.id))
                 continue
                 
@@ -127,10 +244,14 @@ async def chat_completions(
             
         await db.commit()
         is_upstream_error = False
+        credential_ready = False
         try:
             raw_secret = decrypt_secret(cred.encrypted_secret)
             provider = get_provider(cred)
-            extra_kwargs = {k: v for k, v in payload.items() if k not in ["model", "messages", "stream"]}
+            credential_ready = True
+            extra_kwargs = {k: v for k, v in payload.items() if k not in {"model", "messages", "stream", "session_id", "sessionId", "conversation_id", "conversation", "prompt_cache_key"}}
+            if cred.type == "antigravity":
+                extra_kwargs["session_id"] = session_id
             if stream:
                 is_upstream_error = True
                 response = await provider.chat_completion(
@@ -145,11 +266,12 @@ async def chat_completions(
                     raise stream_err
                 is_upstream_error = False
                 
-                simple_vkey = type("SimpleVKey", (), {"id": vkey.id})()
+                simple_vkey = type("SimpleVKey", (), {"id": vkey.id, "user_id": vkey.user_id})()
                 simple_cred = type("SimpleCred", (), {"id": cred.id, "type": cred.type})()
                 return StreamingResponse(
                     usage_service.stream_response_generator(
-                        simple_cred, first_chunk, response, raw_secret, simple_vkey, matched_model, None, start_time
+                        simple_cred, first_chunk, response, raw_secret, simple_vkey, matched_model, None, start_time,
+                        (vkey.user_id, session_id, matched_model, cred.type)
                     ),
                     media_type="text/event-stream"
                 )
@@ -181,8 +303,7 @@ async def chat_completions(
                 return response
                 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Upstream credential request failed")
             
             if not is_upstream_error:
                 from app.db.session import AsyncSessionLocal
@@ -191,6 +312,18 @@ async def chat_completions(
                         await CredentialSelector.release(str(cred.id), 0, local_db)
                 except Exception:
                     pass
+                if not credential_ready:
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    await usage_service.log_usage_event(
+                        db, vkey.id, cred.id, matched_model, None, latency_ms, "failure"
+                    )
+                    last_exception = e
+                    # Local decrypt/init failures are not quota/auth exhaustion.
+                    await _handle_credential_failure(
+                        db, vkey, cred, session_id, matched_model, UpstreamErrorKind.CLIENT
+                    )
+                    exclude_ids.append(str(cred.id))
+                    continue
                 raise HTTPException(status_code=500, detail=str(e))
                 
             await CredentialSelector.release(str(cred.id), 0, db)
@@ -199,29 +332,8 @@ async def chat_completions(
             
             last_exception = e
             
-            is_rate_limit, is_quota = classify_upstream_error(e)
-            err_str = str(e).lower()
-            err_class = e.__class__.__name__
-            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
-                
-            stmt = select(Credential).where(Credential.id == cred.id)
-            result = await db.execute(stmt)
-            db_cred = result.scalar_one_or_none()
-            if db_cred:
-                if is_rate_limit:
-                    db_cred.status = "cooldown"
-                    db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-                    await db.commit()
-                elif is_quota:
-                    if db_cred.type == "antigravity":
-                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
-                    else:
-                        db_cred.status = "exhausted"
-                    await db.commit()
-                elif not is_transient:
-                    db_cred.status = "degraded"
-                    await db.commit()
-                
+            kind = classify_upstream_error_kind(e)
+            await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             exclude_ids.append(str(cred.id))
             continue
             
@@ -247,6 +359,7 @@ async def embeddings(
     token = authorization.split(" ")[1]
     exclude_ids = []
     estimated_tokens = 100
+    session_id = None
     
     input_data = payload.get("input", "")
     start_time = time.time()
@@ -257,7 +370,7 @@ async def embeddings(
     while attempt < MAX_RETRIES:
         attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
-            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids
+            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids, session_id=session_id
         )
         if not cred:
             if last_exception:
@@ -278,9 +391,11 @@ async def embeddings(
             
         await db.commit()
         is_upstream_error = False
+        credential_ready = False
         try:
             raw_secret = decrypt_secret(cred.encrypted_secret)
             provider = get_provider(cred)
+            credential_ready = True
             is_upstream_error = True
             response = await provider.embedding(
                 model=matched_model,
@@ -306,8 +421,7 @@ async def embeddings(
             return response
             
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Upstream credential request failed")
             
             if not is_upstream_error:
                 from app.db.session import AsyncSessionLocal
@@ -316,6 +430,17 @@ async def embeddings(
                         await CredentialSelector.release(str(cred.id), 0, local_db)
                 except Exception:
                     pass
+                if not credential_ready:
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    await usage_service.log_usage_event(
+                        db, vkey.id, cred.id, matched_model, None, latency_ms, "failure"
+                    )
+                    last_exception = e
+                    await _handle_credential_failure(
+                        db, vkey, cred, session_id, matched_model, UpstreamErrorKind.CLIENT
+                    )
+                    exclude_ids.append(str(cred.id))
+                    continue
                 raise HTTPException(status_code=500, detail=str(e))
                 
             await CredentialSelector.release(str(cred.id), 0, db)
@@ -324,29 +449,8 @@ async def embeddings(
             
             last_exception = e
             
-            is_rate_limit, is_quota = classify_upstream_error(e)
-            err_str = str(e).lower()
-            err_class = e.__class__.__name__
-            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
-                
-            stmt = select(Credential).where(Credential.id == cred.id)
-            result = await db.execute(stmt)
-            db_cred = result.scalar_one_or_none()
-            if db_cred:
-                if is_rate_limit:
-                    db_cred.status = "cooldown"
-                    db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-                    await db.commit()
-                elif is_quota:
-                    if db_cred.type == "antigravity":
-                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
-                    else:
-                        db_cred.status = "exhausted"
-                    await db.commit()
-                elif not is_transient:
-                    db_cred.status = "degraded"
-                    await db.commit()
-                
+            kind = classify_upstream_error_kind(e)
+            await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             exclude_ids.append(str(cred.id))
             continue
             
@@ -441,6 +545,7 @@ async def images_generations(
     
     exclude_ids = []
     start_time = time.time()
+    session_id = None
     last_exception = None
     
     MAX_RETRIES = 10
@@ -458,7 +563,6 @@ async def images_generations(
             raise HTTPException(status_code=503, detail="No eligible credentials available")
             
         try:
-            raw_secret = decrypt_secret(cred.encrypted_secret)
             provider = get_provider(cred)
             response = await provider.chat_completion(
                 model=matched_model,
@@ -504,8 +608,7 @@ async def images_generations(
             }
             
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Upstream credential request failed")
             
             from app.db.session import AsyncSessionLocal
             try:
@@ -520,29 +623,8 @@ async def images_generations(
             last_exception = e
             exclude_ids.append(str(cred.id))
             
-            is_rate_limit, is_quota = classify_upstream_error(e)
-            err_str = str(e).lower()
-            err_class = e.__class__.__name__
-            is_transient = err_class in ("ReadTimeout", "ConnectTimeout", "ConnectError", "PoolTimeout", "ReadError", "WriteError", "LocalProtocolError", "RemoteProtocolError") or "timeout" in err_str or "connecterror" in err_str
-                
-            stmt = select(Credential).where(Credential.id == cred.id)
-            result = await db.execute(stmt)
-            db_cred = result.scalar_one_or_none()
-            if db_cred:
-                if is_rate_limit:
-                    db_cred.status = "cooldown"
-                    db_cred.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-                    await db.commit()
-                elif is_quota:
-                    if db_cred.type == "antigravity":
-                        await _mark_antigravity_group_exhausted(db_cred, matched_model)
-                    else:
-                        db_cred.status = "exhausted"
-                    await db.commit()
-                elif not is_transient:
-                    db_cred.status = "degraded"
-                    await db.commit()
-            
+            kind = classify_upstream_error_kind(e)
+            await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             continue
             
     if last_exception:

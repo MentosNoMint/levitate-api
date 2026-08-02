@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import asyncio
+import time
+import uuid
 import httpx
-import litellm
 import logging
 from typing import Any, List, Dict
 
@@ -12,7 +14,6 @@ from sqlalchemy import update
 
 from app.providers.base import BaseProvider
 from app.crypto.cipher import decrypt_secret, encrypt_secret
-from app.security.egress import sanitize_headers
 from app.redis_client import redis_client
 from app.db.session import AsyncSessionLocal
 from app.db.models import Credential
@@ -103,17 +104,20 @@ class AntigravityProvider(BaseProvider):
                 return cached_token
 
         lock_key = f"lock:token_refresh:{self.credential.id}"
-        acquired = await redis_client.set(lock_key, "1", ex=15, nx=True)
+        lock_token = uuid.uuid4().hex
+        acquired = await redis_client.set(lock_key, lock_token, ex=90, nx=True)
         
         if not acquired:
-            for _ in range(10):
-                await asyncio.sleep(1)
+            for _ in range(950):
+                await asyncio.sleep(0.1)
                 cached_token = await redis_client.get(cache_key)
                 if cached_token:
                     return cached_token
+            raise Exception("Timeout waiting for access token refresh lock")
                     
         try:
             secret_data = decrypt_secret(self.credential.encrypted_secret)
+            config = None
             try:
                 config = json.loads(secret_data)
                 refresh_token = config.get("refresh_token")
@@ -128,7 +132,7 @@ class AntigravityProvider(BaseProvider):
                 client_id = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
                 client_secret = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 payload = {
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
@@ -138,29 +142,104 @@ class AntigravityProvider(BaseProvider):
                     payload["client_secret"] = client_secret
 
                 resp = await client.post("https://oauth2.googleapis.com/token", data=payload)
-                resp.raise_for_status()
-                access_token = resp.json()["access_token"]
-                
-            await redis_client.set(cache_key, access_token, ex=3000)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 400 and "invalid_grant" in e.response.text.lower():
+                        await self._mark_reauth_required()
+                        await redis_client.delete(cache_key)
+                        raise Exception(f"invalid_grant: {e.response.text}")
+                    raise
+                token_data = resp.json()
+                access_token = token_data["access_token"]
+                expires_in = int(token_data.get("expires_in", 3600) or 3600)
+                rotated_refresh_token = token_data.get("refresh_token")
+
+            if rotated_refresh_token:
+                persisted_config = dict(config) if isinstance(config, dict) else {"refresh_token": refresh_token}
+                persisted_config["refresh_token"] = rotated_refresh_token
+                encrypted = encrypt_secret(json.dumps(persisted_config))
+                async with AsyncSessionLocal() as db:
+                    stmt = (
+                        update(Credential)
+                        .where(Credential.id == self.credential.id)
+                        .values(encrypted_secret=encrypted)
+                    )
+                    await db.execute(stmt)
+                    await db.commit()
+                self.credential.encrypted_secret = encrypted
+
+            # Refresh early enough that a request never starts with an almost
+            # expired token. The Redis TTL is the single-flight cache lifetime.
+            await redis_client.set(cache_key, access_token, ex=max(1, expires_in - 60))
             return access_token
         finally:
             if acquired:
-                await redis_client.delete(lock_key)
+                await redis_client.compare_delete(lock_key, lock_token)
 
-    async def _trigger_cooldown(self) -> None:
+    async def _acquire_secret_write_lock(self) -> str:
+        """Serialize encrypted-secret updates with OAuth refresh writes."""
+        lock_key = f"lock:token_refresh:{self.credential.id}"
+        token = uuid.uuid4().hex
+        for _ in range(950):
+            if await redis_client.set(lock_key, token, ex=90, nx=True):
+                return token
+            await asyncio.sleep(0.1)
+        raise Exception("Timeout waiting for credential secret write lock")
+
+    async def _release_secret_write_lock(self, token: str) -> None:
+        await redis_client.compare_delete(f"lock:token_refresh:{self.credential.id}", token)
+
+    async def _mark_reauth_required(self) -> None:
         async with AsyncSessionLocal() as db:
-            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=5)
             stmt = (
                 update(Credential)
                 .where(Credential.id == self.credential.id)
+                .values(status="reauth_required", reset_at=None)
+            )
+            await db.execute(stmt)
+            await db.commit()
+        self.credential.status = "reauth_required"
+        self.credential.reset_at = None
+
+    async def _trigger_cooldown(self, minutes: int = 1) -> None:
+        """Apply a short RPM-style cooldown without touching terminal statuses.
+
+        Must not be called for client/schema/model errors or generic stream
+        failures — those are classified by the chat failure handler instead.
+        """
+        async with AsyncSessionLocal() as db:
+            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            stmt = (
+                update(Credential)
+                .where(
+                    Credential.id == self.credential.id,
+                    Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                )
                 .values(status="cooldown", reset_at=cooldown_until)
             )
             await db.execute(stmt)
             await db.commit()
 
+    @staticmethod
+    def _derive_session_id(messages: List[Dict[str, str]]) -> str:
+        for message in messages or []:
+            if isinstance(message, dict) and message.get("role") == "user":
+                canonical = json.dumps(message, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                return f"session-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+        return "session-anonymous"
+
+    @staticmethod
+    def _make_request_id(session_id: str, kwargs: dict) -> str:
+        agent_seed = str(kwargs.get("agent_id") or kwargs.get("agent") or session_id)
+        agent = hashlib.sha256(agent_seed.encode("utf-8")).hexdigest()[:24]
+        trajectory = str(kwargs.get("trajectory_id") or "0").replace("/", "_")
+        step = str(kwargs.get("step") or "1").replace("/", "_")
+        return f"agent/{agent}/{int(time.time() * 1000)}/{trajectory}/{step}-{uuid.uuid4().hex[:12]}"
+
     async def chat_completion(self, model: str, messages: List[Dict[str, str]], **kwargs) -> Any:
-        import uuid
-        import time
+        session_id = str(kwargs.get("session_id") or self._derive_session_id(messages))
+        request_id = str(kwargs.get("request_id") or self._make_request_id(session_id, kwargs))
 
         try:
             secret_data = decrypt_secret(self.credential.encrypted_secret)
@@ -216,7 +295,10 @@ class AntigravityProvider(BaseProvider):
             content = msg.get("content", "")
             if role == "system":
                 formatted_text = self._format_content(content)
-                system_instruction = {"parts": [{"text": formatted_text}]}
+                if system_instruction is None:
+                    system_instruction = {"parts": [{"text": formatted_text}]}
+                else:
+                    system_instruction["parts"].append({"text": formatted_text})
             else:
                 parts = []
                 if role == "assistant":
@@ -325,7 +407,9 @@ class AntigravityProvider(BaseProvider):
                     })
 
         request_body = {
-            "contents": contents
+            "contents": contents,
+            "sessionId": session_id,
+            "requestId": request_id,
         }
         if system_instruction:
             request_body["systemInstruction"] = system_instruction
@@ -361,7 +445,13 @@ class AntigravityProvider(BaseProvider):
         
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
         if max_tokens is not None:
-            gen_config["maxOutputTokens"] = min(int(max_tokens), 8192)
+            # По умолчанию лимит для большинства моделей Gemini составляет 8192.
+            # Для моделей с поддержкой длинного вывода (flash-agent, thinking) лимит равен 65536.
+            max_limit = 8192
+            lower_mapped = mapped_model.lower() if mapped_model else ""
+            if "flash-agent" in lower_mapped or "thinking" in lower_mapped:
+                max_limit = 65536
+            gen_config["maxOutputTokens"] = min(int(max_tokens), max_limit)
             
         temperature = kwargs.get("temperature")
         if temperature is not None:
@@ -437,12 +527,12 @@ class AntigravityProvider(BaseProvider):
             "model": mapped_model,
             "request": request_body
         }
-        logger.debug("Companion request body: %s", json.dumps(body))
-        try:
-            with open("/app/debug.log", "a") as f:
-                f.write(f"MODEL: {model} kwargs: {json.dumps(kwargs)}\nBODY: {json.dumps(body)}\n")
-        except Exception:
-            pass
+        logger.debug(
+            "Prepared Antigravity request model=%s session=%s request=%s",
+            model,
+            session_id,
+            request_id,
+        )
 
         async def response_generator():
             client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
@@ -465,8 +555,13 @@ class AntigravityProvider(BaseProvider):
                                 raise httpx.HTTPStatusError("Auth error", request=response.request, response=response)
                             if response.status_code != 200:
                                 body_text = await response.aread()
-                                logger.error("Google API Error %s: %s", response.status_code, body_text.decode())
-                                raise Exception(f"HTTP {response.status_code}: {body_text.decode()}")
+                                error_text = body_text.decode(errors="replace")
+                                logger.error(
+                                    "Antigravity request failed with HTTP %s: %s",
+                                    response.status_code,
+                                    error_text[:500],
+                                )
+                                raise Exception(f"HTTP {response.status_code}: {error_text}")
                             chat_id = f"chatcmpl-{uuid.uuid4()}"
                             created_time = int(time.time())
                             async for line in response.aiter_lines():
@@ -476,7 +571,6 @@ class AntigravityProvider(BaseProvider):
                                     data_str = line[6:].strip()
                                     if not data_str:
                                         continue
-                                    logger.debug("Raw SSE: %s", data_str)
                                     try:
                                         chunk_json = json.loads(data_str)
                                     except Exception:
@@ -595,15 +689,13 @@ class AntigravityProvider(BaseProvider):
                                         completion_tokens = usage_meta.get("candidatesTokenCount", 0)
 
                                         from litellm import Usage
-
+                                        
+                                        cached_tokens = int(usage_meta.get("cachedContentTokenCount", 0) or 0)
                                         usage_obj = Usage(
-
                                             prompt_tokens=prompt_tokens,
-
                                             completion_tokens=completion_tokens,
-
-                                            total_tokens=prompt_tokens + completion_tokens
-
+                                            total_tokens=prompt_tokens + completion_tokens,
+                                            prompt_tokens_details={"cached_tokens": cached_tokens} if cached_tokens else None,
                                         )
 
                                     from litellm.types.utils import ModelResponseStream
@@ -640,17 +732,27 @@ class AntigravityProvider(BaseProvider):
                                     )
                             break
                 except httpx.HTTPStatusError as status_err:
+                    # One token-cache refresh retry for auth challenges only.
+                    # Do not mutate credential status here — chat/usage classify
+                    # quota vs rate-limit vs auth vs client errors centrally.
                     if status_err.response.status_code in (401, 403) and attempt == 0:
-                        continue
-                    await self._trigger_cooldown()
-                    raise status_err
-                except Exception as stream_err:
-                    err_str = str(stream_err).lower()
-                    if ("401" in err_str or "403" in err_str or "unauthorized" in err_str or "credentials" in err_str) and attempt == 0:
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)
                         continue
-                    await self._trigger_cooldown()
+                    raise status_err
+                except Exception as stream_err:
+                    err_str = str(stream_err)
+                    # Retry once only for the HTTP 401/403 envelopes we raise above.
+                    # Broad substring matches like "credentials" must NOT reauth.
+                    is_retryable_auth_http = (
+                        err_str.startswith("HTTP 401:")
+                        or err_str.startswith("HTTP 403:")
+                        or err_str.startswith("Auth error")
+                    )
+                    if is_retryable_auth_http and attempt == 0:
+                        cache_key = get_credential_access_token_key(self.credential.id)
+                        await redis_client.delete(cache_key)
+                        continue
                     raise stream_err
 
         if kwargs.get("stream", False):
@@ -909,60 +1011,72 @@ class AntigravityProvider(BaseProvider):
         raise Exception("Google Account has no eligible cloudaicompanionProject.")
 
     async def _save_project_id(self, project_id: str) -> None:
+        lock_token = await self._acquire_secret_write_lock()
         try:
-            secret_data = decrypt_secret(self.credential.encrypted_secret)
-            secret_dict = json.loads(secret_data)
-            if not isinstance(secret_dict, dict):
-                secret_dict = {"refresh_token": secret_data}
-        except Exception:
-            secret_dict = {"refresh_token": decrypt_secret(self.credential.encrypted_secret)}
+            async with AsyncSessionLocal() as db:
+                db_credential = await db.get(Credential, self.credential.id)
+                encrypted_secret = (
+                    db_credential.encrypted_secret if db_credential else self.credential.encrypted_secret
+                )
+                try:
+                    secret_data = decrypt_secret(encrypted_secret)
+                    secret_dict = json.loads(secret_data)
+                    if not isinstance(secret_dict, dict):
+                        secret_dict = {"refresh_token": secret_data}
+                except Exception:
+                    secret_dict = {"refresh_token": decrypt_secret(encrypted_secret)}
 
-        secret_dict["project_id"] = project_id
-        encrypted = encrypt_secret(json.dumps(secret_dict))
-
-        async with AsyncSessionLocal() as db:
-            stmt = (
-                update(Credential)
-                .where(Credential.id == self.credential.id)
-                .values(encrypted_secret=encrypted)
-            )
-            await db.execute(stmt)
-            await db.commit()
-
-        self.credential.encrypted_secret = encrypted
+                secret_dict["project_id"] = project_id
+                encrypted = encrypt_secret(json.dumps(secret_dict))
+                stmt = (
+                    update(Credential)
+                    .where(Credential.id == self.credential.id)
+                    .values(encrypted_secret=encrypted)
+                )
+                await db.execute(stmt)
+                await db.commit()
+                self.credential.encrypted_secret = encrypted
+        finally:
+            await self._release_secret_write_lock(lock_token)
 
     async def _save_quota_metadata(self, tier: str, load_error: str = None, quota_error: str = None) -> None:
+        lock_token = await self._acquire_secret_write_lock()
         try:
-            secret_data = decrypt_secret(self.credential.encrypted_secret)
-            secret_dict = json.loads(secret_data)
-            if not isinstance(secret_dict, dict):
-                secret_dict = {"refresh_token": secret_data}
-        except Exception:
-            secret_dict = {"refresh_token": decrypt_secret(self.credential.encrypted_secret)}
+            async with AsyncSessionLocal() as db:
+                db_credential = await db.get(Credential, self.credential.id)
+                encrypted_secret = (
+                    db_credential.encrypted_secret if db_credential else self.credential.encrypted_secret
+                )
+                try:
+                    secret_data = decrypt_secret(encrypted_secret)
+                    secret_dict = json.loads(secret_data)
+                    if not isinstance(secret_dict, dict):
+                        secret_dict = {"refresh_token": secret_data}
+                except Exception:
+                    secret_dict = {"refresh_token": decrypt_secret(encrypted_secret)}
 
-        secret_dict["tier"] = tier
-        if load_error:
-            secret_dict["load_error"] = load_error
-        else:
-            secret_dict.pop("load_error", None)
+                secret_dict["tier"] = tier
+                if load_error:
+                    secret_dict["load_error"] = load_error
+                else:
+                    secret_dict.pop("load_error", None)
 
-        if quota_error:
-            secret_dict["quota_error"] = quota_error
-        else:
-            secret_dict.pop("quota_error", None)
+                if quota_error:
+                    secret_dict["quota_error"] = quota_error
+                else:
+                    secret_dict.pop("quota_error", None)
 
-        encrypted = encrypt_secret(json.dumps(secret_dict))
-
-        async with AsyncSessionLocal() as db:
-            stmt = (
-                update(Credential)
-                .where(Credential.id == self.credential.id)
-                .values(encrypted_secret=encrypted)
-            )
-            await db.execute(stmt)
-            await db.commit()
-
-        self.credential.encrypted_secret = encrypted
+                encrypted = encrypt_secret(json.dumps(secret_dict))
+                stmt = (
+                    update(Credential)
+                    .where(Credential.id == self.credential.id)
+                    .values(encrypted_secret=encrypted)
+                )
+                await db.execute(stmt)
+                await db.commit()
+                self.credential.encrypted_secret = encrypted
+        finally:
+            await self._release_secret_write_lock(lock_token)
 
     async def fetch_quota(self, force: bool = False) -> dict:
         # Кэшируем запросы к квотам Google API на 15 минут, чтобы избежать рейт-лимитов на IP
@@ -1013,17 +1127,20 @@ class AntigravityProvider(BaseProvider):
             try:
                 access_token = await self.get_access_token(force_refresh=(attempt > 0))
             except Exception as e:
+                if attempt == 1 and "invalid_grant" in str(e).lower():
+                    await self._mark_reauth_required()
+                    return {"error": str(e), "load_error": str(e), "status": "reauth_required"}
                 if attempt == 1:
                     async with AsyncSessionLocal() as db:
                         stmt = (
                             update(Credential)
-                            .where(Credential.id == self.credential.id)
+                            .where(
+                                Credential.id == self.credential.id,
+                                Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                            )
                             .values(
-                                status="error",
+                                status="degraded",
                                 last_check_at=datetime.now(timezone.utc),
-                                quota_total_tokens=1000000,
-                                quota_used_tokens=1000000,
-                                model_quotas={},
                             )
                         )
                         await db.execute(stmt)
@@ -1040,10 +1157,26 @@ class AntigravityProvider(BaseProvider):
                         headers=headers,
                         json={}
                     )
-                    if load_resp.status_code in (401, 403) and attempt == 0:
-                        cache_key = get_credential_access_token_key(self.credential.id)
-                        await redis_client.delete(cache_key)
-                        continue
+                    if load_resp.status_code in (401, 403):
+                        if attempt == 0:
+                            cache_key = get_credential_access_token_key(self.credential.id)
+                            await redis_client.delete(cache_key)
+                            continue
+                        if load_resp.status_code == 401:
+                            await self._mark_reauth_required()
+                            return {"error": f"Auth error: HTTP {load_resp.status_code}", "status": "reauth_required"}
+                        async with AsyncSessionLocal() as db:
+                            stmt = (
+                                update(Credential)
+                                .where(
+                                    Credential.id == self.credential.id,
+                                    Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                                )
+                                .values(status="degraded", last_check_at=datetime.now(timezone.utc))
+                            )
+                            await db.execute(stmt)
+                            await db.commit()
+                        return {"error": f"Permission error: HTTP {load_resp.status_code}", "status": "degraded"}
                     model_payload = {
                         "project": project_id
                     }
@@ -1052,10 +1185,26 @@ class AntigravityProvider(BaseProvider):
                         headers=headers,
                         json=model_payload
                     )
-                    if quota_resp.status_code in (401, 403) and attempt == 0:
-                        cache_key = get_credential_access_token_key(self.credential.id)
-                        await redis_client.delete(cache_key)
-                        continue
+                    if quota_resp.status_code in (401, 403):
+                        if attempt == 0:
+                            cache_key = get_credential_access_token_key(self.credential.id)
+                            await redis_client.delete(cache_key)
+                            continue
+                        if quota_resp.status_code == 401:
+                            await self._mark_reauth_required()
+                            return {"error": f"Auth error: HTTP {quota_resp.status_code}", "status": "reauth_required"}
+                        async with AsyncSessionLocal() as db:
+                            stmt = (
+                                update(Credential)
+                                .where(
+                                    Credential.id == self.credential.id,
+                                    Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                                )
+                                .values(status="degraded", last_check_at=datetime.now(timezone.utc))
+                            )
+                            await db.execute(stmt)
+                            await db.commit()
+                        return {"error": f"Permission error: HTTP {quota_resp.status_code}", "status": "degraded"}
                     try:
                         uq_resp = await client.post(
                             f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:retrieveUserQuotaSummary",
@@ -1065,25 +1214,34 @@ class AntigravityProvider(BaseProvider):
                         if uq_resp.status_code == 200:
                             uq_data = uq_resp.json()
                     except Exception as e:
-                        print(f"Error fetching user quota summary inside client block: {e}", flush=True)
+                        logger.warning("Error fetching user quota summary: %s", e)
                     break
                 except Exception as e:
                     err_str = str(e).lower()
-                    if ("401" in err_str or "403" in err_str or "unauthorized" in err_str or "credentials" in err_str) and attempt == 0:
+                    is_retryable_auth = (
+                        "http 401" in err_str
+                        or "unauthorized" in err_str
+                        or err_str.startswith("auth error: http 401")
+                        or err_str.startswith("auth error: http 403")
+                    )
+                    if is_retryable_auth and attempt == 0:
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)
                         continue
+                    if attempt == 1 and "invalid_grant" in err_str:
+                        await self._mark_reauth_required()
+                        return {"error": str(e), "load_error": str(e), "status": "reauth_required"}
                     if attempt == 1:
                         async with AsyncSessionLocal() as db:
                             stmt = (
                                 update(Credential)
-                                .where(Credential.id == self.credential.id)
+                                .where(
+                                    Credential.id == self.credential.id,
+                                    Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                                )
                                 .values(
-                                    status="error",
+                                    status="degraded",
                                     last_check_at=datetime.now(timezone.utc),
-                                    quota_total_tokens=1000000,
-                                    quota_used_tokens=1000000,
-                                    model_quotas={},
                                 )
                             )
                             await db.execute(stmt)
@@ -1236,34 +1394,62 @@ class AntigravityProvider(BaseProvider):
         elif not any(v is not None for v in group_fractions.values()) and remaining_fraction <= 0.0:
             status_val = "exhausted"
 
-        if not load_ok or not quota_ok:
-            status_val = "error"
-            remaining_fraction = 0.0
-            models_list = self.credential.models or []
-            quota_details = {m: 0.0 for m in models_list}
+        existing_status = self.credential.status or "active"
+        existing_reset_at = self.credential.reset_at
+        if existing_reset_at and existing_reset_at.tzinfo is None:
+            existing_reset_at = existing_reset_at.replace(tzinfo=timezone.utc)
+
+        if existing_status in {"reauth_required", "disabled"}:
+            status_val = existing_status
+            quota_details = dict(self.credential.model_quotas or quota_details)
+        elif existing_status == "cooldown" and existing_reset_at and datetime.now(timezone.utc) < existing_reset_at:
+            status_val = "cooldown"
+            quota_details = dict(self.credential.model_quotas or quota_details)
+        elif not load_ok or not quota_ok:
+            # Probe failure is not quota exhaustion — keep last known quotas for UI
+            # and avoid cascading cooldown→exhausted from synthetic zeros.
+            status_val = "degraded"
+            quota_details = dict(self.credential.model_quotas or {})
+            if remaining_fraction is None:
+                remaining_fraction = 1.0
 
 
         total_tokens = 1_000_000
         used_tokens = int(total_tokens * (1 - remaining_fraction))
 
-        if reset_at_val is None:
+        if status_val == "cooldown" and existing_reset_at:
+            reset_at_val = existing_reset_at
+        elif status_val in {"reauth_required", "disabled"}:
+            reset_at_val = None
+        elif reset_at_val is None:
             reset_at_val = datetime.now(timezone.utc) + timedelta(hours=24)
 
-        async with AsyncSessionLocal() as db:
-            stmt = (
-                update(Credential)
-                .where(Credential.id == self.credential.id)
-                .values(
-                    quota_total_tokens=total_tokens,
-                    quota_used_tokens=used_tokens,
-                    last_check_at=datetime.now(timezone.utc),
-                    reset_at=reset_at_val,
-                    model_quotas=quota_details,
-                    status=status_val,
-                )
-            )
-            await db.execute(stmt)
-            await db.commit()
+        from app.routing.selector import CredentialSelector
+        state_token = await CredentialSelector._acquire_credential_state_lock(self.credential.id)
+        if state_token:
+            try:
+                async with AsyncSessionLocal() as db:
+                    stmt = (
+                        update(Credential)
+                        .where(
+                            Credential.id == self.credential.id,
+                            Credential.status == existing_status,
+                        )
+                        .values(
+                            quota_total_tokens=total_tokens,
+                            quota_used_tokens=used_tokens,
+                            last_check_at=datetime.now(timezone.utc),
+                            reset_at=reset_at_val,
+                            model_quotas=quota_details,
+                            status=status_val,
+                        )
+                    )
+                    await db.execute(stmt)
+                    await db.commit()
+            finally:
+                await CredentialSelector._release_credential_state_lock(self.credential.id, state_token)
+        else:
+            logger.warning("Could not acquire credential state lock while saving quota for %s", self.credential.id)
 
         result = {
             "tier": tier,

@@ -18,7 +18,7 @@ export interface Credential {
   type: "managed" | "byo";
   priority: number;
   weight: number;
-  status: "active" | "cooldown" | "exhausted" | "error" | "degraded";
+  status: "active" | "cooldown" | "exhausted" | "error" | "degraded" | "reauth_required" | "disabled";
   concurrency: number;
   requestsCount: number;
   latencyAvg: number;
@@ -84,7 +84,7 @@ interface BackendCredential {
   concurrency_limit: number | null;
   priority: number;
   weight: number;
-  status: "active" | "cooldown" | "exhausted" | "error" | "degraded";
+  status: "active" | "cooldown" | "exhausted" | "error" | "degraded" | "reauth_required" | "disabled";
   expires_at: string | null;
   last_check_at: string | null;
   model_quotas: Record<string, number> | null;
