@@ -25,7 +25,7 @@ from app.providers.byo_upstream import BYOUpstreamProvider
 from app.providers.antigravity import AntigravityProvider
 from app.services import usage_service
 from app.redis_client import redis_client
-from app.core.constants import get_vkey_tokens_key
+from app.core.constants import get_credential_cooldown_key
 from app.core.error_classifier import (
     UpstreamErrorKind,
     classify_upstream_error_kind,
@@ -44,6 +44,10 @@ async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str
 
     quotas = dict(db_cred.model_quotas or {})
     quotas[group_key] = 0.0
+    # Zero the specific model too, so the per-model routing check (#1) stops
+    # selecting it until fetch_quota refreshes real fractions
+    if model_name:
+        quotas[model_name] = 0.0
     db_cred.model_quotas = quotas
 
     # Determine global status from group fractions
@@ -150,17 +154,22 @@ async def _handle_credential_failure(
             db_credential.status = "reauth_required"
             db_credential.reset_at = None
         elif kind == UpstreamErrorKind.TRANSIENT:
-            # Optional short cooldown only — never exhausted / reauth.
+            # Optional short cooldown only - never exhausted / reauth.
+            # Cooldown via ephemeral Redis key; do not overwrite reset_at (#6, N1)
             db_credential.status = "cooldown"
-            db_credential.reset_at = datetime.now(timezone.utc) + timedelta(seconds=10)
+            await redis_client.set(get_credential_cooldown_key(db_credential.id), "1", ex=10)
         elif kind == UpstreamErrorKind.QUOTA:
             if db_credential.type == "antigravity":
                 await _mark_antigravity_group_exhausted(db_credential, model_name)
             else:
                 db_credential.status = "exhausted"
+                if db_credential.reset_at is None:
+                    # No quota window configured - probe again in 24h (N2)
+                    db_credential.reset_at = datetime.now(timezone.utc) + timedelta(hours=24)
         elif kind == UpstreamErrorKind.RATE_LIMIT:
+            # Cooldown via ephemeral Redis key; reset_at keeps quota window (#6, N1)
             db_credential.status = "cooldown"
-            db_credential.reset_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+            await redis_client.set(get_credential_cooldown_key(db_credential.id), "1", ex=60)
         await db.commit()
     finally:
         await CredentialSelector._release_credential_state_lock(credential.id, state_token)
@@ -319,8 +328,7 @@ async def chat_completions(
                 await CredentialSelector.release(str(cred.id), tokens_used, db)
                 
                 if vkey.id and tokens_used > 0:
-                    vkey_token_key = get_vkey_tokens_key(vkey.id)
-                    await redis_client.incrby(vkey_token_key, tokens_used)
+                    await usage_service.incr_vkey_monthly_tokens(vkey.id, tokens_used)
                     
                 await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
                 if session_id:
@@ -447,8 +455,7 @@ async def embeddings(
             await CredentialSelector.release(str(cred.id), tokens_used, db)
             
             if vkey.id and tokens_used > 0:
-                vkey_token_key = get_vkey_tokens_key(vkey.id)
-                await redis_client.incrby(vkey_token_key, tokens_used)
+                await usage_service.incr_vkey_monthly_tokens(vkey.id, tokens_used)
                 
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
             return response
@@ -621,8 +628,7 @@ async def images_generations(
             await CredentialSelector.release(str(cred.id), 1500, db)
             
             if vkey.id:
-                vkey_token_key = get_vkey_tokens_key(vkey.id)
-                await redis_client.incrby(vkey_token_key, 1500)
+                await usage_service.incr_vkey_monthly_tokens(vkey.id, 1500)
                 
             latency_ms = int((time.time() - start_time) * 1000)
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, response.usage, latency_ms, "success")

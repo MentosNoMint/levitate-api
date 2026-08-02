@@ -63,9 +63,13 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
         "quota exhausted",
         "quota_exceeded",
         "quota exceeded",
+        "insufficient_quota",
+        "billing",
         "per day",
         "per-day",
+        "per_day",
         "daily limit",
+        "daily",
         "capacity exhausted",
         "capacity_exceeded",
         "capacity exceeded",
@@ -78,6 +82,7 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
         "too many requests",
         "per minute",
         "per-minute",
+        "per_minute",
         "rpm",
     )
     quota_context = (
@@ -101,6 +106,11 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
             and not _contains_any(text, rate_markers)
             and (_contains_word(text, "exceeded") or _contains_word(text, "exhausted"))
         )
+        # Bare "quota" without a rate-limit context (e.g. OpenAI "You exceeded
+        # your current quota") is a hard quota error, not a transient rate
+        # limit. Callers guarantee a future reset_at for window-less
+        # credentials, so parking as exhausted is recoverable (#14, N2)
+        or ("quota" in text and not _contains_any(text, rate_markers))
     ):
         return UpstreamErrorKind.QUOTA
 

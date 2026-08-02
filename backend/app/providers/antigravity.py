@@ -17,7 +17,7 @@ from app.crypto.cipher import decrypt_secret, encrypt_secret
 from app.redis_client import redis_client
 from app.db.session import AsyncSessionLocal
 from app.db.models import Credential
-from app.core.constants import get_credential_access_token_key
+from app.core.constants import get_credential_access_token_key, get_credential_cooldown_key
 
 GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "ANTIGRAVITY_CLOUD_CODE_ENDPOINT", 
@@ -113,7 +113,7 @@ class AntigravityProvider(BaseProvider):
                 cached_token = await redis_client.get(cache_key)
                 if cached_token:
                     return cached_token
-            raise Exception("Timeout waiting for access token refresh lock")
+            raise TimeoutError("Timed out waiting for the token refresh lock")
                     
         try:
             secret_data = decrypt_secret(self.credential.encrypted_secret)
@@ -185,7 +185,7 @@ class AntigravityProvider(BaseProvider):
             if await redis_client.set(lock_key, token, ex=90, nx=True):
                 return token
             await asyncio.sleep(0.1)
-        raise Exception("Timeout waiting for credential secret write lock")
+        raise TimeoutError("Timed out waiting for credential secret write lock")
 
     async def _release_secret_write_lock(self, token: str) -> None:
         await redis_client.compare_delete(f"lock:token_refresh:{self.credential.id}", token)
@@ -207,19 +207,22 @@ class AntigravityProvider(BaseProvider):
 
         Must not be called for client/schema/model errors or generic stream
         failures — those are classified by the chat failure handler instead.
+        Cooldown expiry lives in Redis so the quota window in reset_at is
+        never overwritten by a 429 (#6, N1).
         """
         async with AsyncSessionLocal() as db:
-            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
             stmt = (
                 update(Credential)
                 .where(
                     Credential.id == self.credential.id,
                     Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
                 )
-                .values(status="cooldown", reset_at=cooldown_until)
+                .values(status="cooldown")
             )
             await db.execute(stmt)
             await db.commit()
+        await redis_client.set(get_credential_cooldown_key(self.credential.id), "1", ex=300)
+        self.credential.status = "cooldown"
 
     @staticmethod
     def _derive_session_id(messages: List[Dict[str, str]]) -> str:
@@ -247,45 +250,9 @@ class AntigravityProvider(BaseProvider):
             project_id = secret_dict.get("project_id") or os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
         except Exception:
             project_id = os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
-        MODEL_MAPPINGS = {
-            "claude-4.6-sonnet": "claude-sonnet-4-6",
-            "claude-4.6-opus-thinking": "claude-opus-4-6-thinking",
-            "gemini-3.1-pro-low-high": "gemini-pro-agent",
-            "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
-            "Claude Opus 4.6 (Thinking)": "claude-opus-4-6-thinking",
-            "Gemini 3.5 Flash (Low)": "gemini-3.5-flash-low",
-            "Gemini 3.5 Flash (Medium)": "gemini-3.5-flash-extra-low",
-            "Gemini 3.5 Flash (High)": "gemini-3-flash-agent",
-            "Gemini 3.1 Pro (Low)": "gemini-3.1-pro-low",
-            "Gemini 3.1 Pro (High)": "gemini-pro-agent",
-            "Gemini 3.1 Flash Lite": "gemini-3.1-flash-lite",
-            "Gemini 3.1 Flash Image": "gemini-3.1-flash-image",
-            "Gemini 3 Flash": "gemini-3-flash",
-            "GPT-OSS 120B (Medium)": "gpt-oss-120b-medium",
-            "claude-sonnet-4.6-thinking": "claude-sonnet-4-6",
-            "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
-            "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
-            "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
-            "gemini-3.5-flash-medium": "gemini-3.5-flash-extra-low",
-            "gemini-3.5-flash-low": "gemini-3.5-flash-low",
-            "gemini-3.5-flash-high": "gemini-3-flash-agent",
-            "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
-            "gemini-3-flash": "gemini-3-flash",
-            "gemini-3.1-flash-image": "gemini-3.1-flash-image",
-            "gemini-3.1-pro-low": "gemini-3.1-pro-low",
-            "gemini-3.1-pro-high": "gemini-pro-agent",
-            "gemini-3-flash-agent": "gemini-3-flash-agent",
-            "gemini-pro-agent": "gemini-pro-agent",
-            "gpt-oss-120b-medium": "gpt-oss-120b-medium"
-        }
-        mapped_model = MODEL_MAPPINGS.get(model)
-        if not mapped_model:
-            for k, v in MODEL_MAPPINGS.items():
-                if k.lower() == model.lower():
-                    mapped_model = v
-                    break
-        if not mapped_model:
-            mapped_model = model
+        from app.core.constants import resolve_antigravity_upstream_model
+        mapped_model = resolve_antigravity_upstream_model(model)
+
 
 
         contents = []
@@ -445,8 +412,8 @@ class AntigravityProvider(BaseProvider):
         
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
         if max_tokens is not None:
-            # По умолчанию лимит для большинства моделей Gemini составляет 8192.
-            # Для моделей с поддержкой длинного вывода (flash-agent, thinking) лимит равен 65536.
+            # РџРѕ СѓРјРѕР»С‡Р°РЅРёСЋ Р»РёРјРёС‚ РґР»СЏ Р±РѕР»СЊС€РёРЅСЃС‚РІР° РјРѕРґРµР»РµР№ Gemini СЃРѕСЃС‚Р°РІР»СЏРµС‚ 8192.
+            # Р”Р»СЏ РјРѕРґРµР»РµР№ СЃ РїРѕРґРґРµСЂР¶РєРѕР№ РґР»РёРЅРЅРѕРіРѕ РІС‹РІРѕРґР° (flash-agent, thinking) Р»РёРјРёС‚ СЂР°РІРµРЅ 65536.
             max_limit = 8192
             lower_mapped = mapped_model.lower() if mapped_model else ""
             if "flash-agent" in lower_mapped or "thinking" in lower_mapped:
@@ -533,6 +500,13 @@ class AntigravityProvider(BaseProvider):
             session_id,
             request_id,
         )
+        # Full request bodies (user prompts) — only when explicitly enabled (#28)
+        if os.getenv("ANTIGRAVITY_DEBUG_LOG", "").strip().lower() in ("1", "true", "yes"):
+            try:
+                with open("/app/debug.log", "a") as f:
+                    f.write(f"MODEL: {model} kwargs: {json.dumps(kwargs)}\nBODY: {json.dumps(body)}\n")
+            except Exception:
+                pass
 
         async def response_generator():
             client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
@@ -733,7 +707,7 @@ class AntigravityProvider(BaseProvider):
                             break
                 except httpx.HTTPStatusError as status_err:
                     # One token-cache refresh retry for auth challenges only.
-                    # Do not mutate credential status here — chat/usage classify
+                    # Do not mutate credential status here вЂ” chat/usage classify
                     # quota vs rate-limit vs auth vs client errors centrally.
                     if status_err.response.status_code in (401, 403) and attempt == 0:
                         cache_key = get_credential_access_token_key(self.credential.id)
@@ -1079,7 +1053,7 @@ class AntigravityProvider(BaseProvider):
             await self._release_secret_write_lock(lock_token)
 
     async def fetch_quota(self, force: bool = False) -> dict:
-        # Кэшируем запросы к квотам Google API на 15 минут, чтобы избежать рейт-лимитов на IP
+        # РљСЌС€РёСЂСѓРµРј Р·Р°РїСЂРѕСЃС‹ Рє РєРІРѕС‚Р°Рј Google API РЅР° 15 РјРёРЅСѓС‚, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ СЂРµР№С‚-Р»РёРјРёС‚РѕРІ РЅР° IP
         if not force and self.credential.last_check_at:
             now = datetime.now(timezone.utc)
             last_check = self.credential.last_check_at
@@ -1342,7 +1316,7 @@ class AntigravityProvider(BaseProvider):
                     if min_fraction is None or frac < min_fraction:
                         min_fraction = frac
 
-            # Получаем детальные квоты (недельные, 5-часовые)
+            # РџРѕР»СѓС‡Р°РµРј РґРµС‚Р°Р»СЊРЅС‹Рµ РєРІРѕС‚С‹ (РЅРµРґРµР»СЊРЅС‹Рµ, 5-С‡Р°СЃРѕРІС‹Рµ)
             if uq_data:
                 for group in uq_data.get("groups", []):
                     for bucket in group.get("buckets", []):
@@ -1357,20 +1331,36 @@ class AntigravityProvider(BaseProvider):
             if earliest_reset:
                 reset_at_val = earliest_reset
 
-        # --- Per-group fraction aggregation ---
+        # --- Per-group fraction aggregation (credential's own models only) ---
+        # Aggregating over EVERY bucket in the API response let a single
+        # exhausted model the credential doesn't even serve zero out the
+        # whole group and block live models from routing (#1)
         from app.core.constants import get_model_quota_group
 
         group_fractions: dict[str, float | None] = {"gemini": None, "others": None}
 
-        for key, frac_val in list(quota_details.items()):
-            if key.endswith(":reset") or key.startswith("_group:"):
-                continue
+        cred_models = [m for m in (self.credential.models or []) if isinstance(m, str)]
+        for model in cred_models:
+            frac_val = quota_details.get(model)
             if not isinstance(frac_val, (int, float)):
                 continue
-            group = get_model_quota_group(key)
+            group = get_model_quota_group(model)
             current = group_fractions[group]
             if current is None or float(frac_val) < current:
                 group_fractions[group] = float(frac_val)
+
+        # Fallback: none of the credential's models appeared in the API
+        # response (e.g. empty models list) - aggregate over everything
+        if all(v is None for v in group_fractions.values()):
+            for key, frac_val in list(quota_details.items()):
+                if key.endswith(":reset") or key.startswith("_group:"):
+                    continue
+                if not isinstance(frac_val, (int, float)):
+                    continue
+                group = get_model_quota_group(key)
+                current = group_fractions[group]
+                if current is None or float(frac_val) < current:
+                    group_fractions[group] = float(frac_val)
 
         # Write synthetic group keys
         for grp, grp_frac in group_fractions.items():
@@ -1388,26 +1378,27 @@ class AntigravityProvider(BaseProvider):
         status_val = "active"
         # Set exhausted ONLY when ALL groups are known and explicitly at zero.
         # If any group is unknown (None) or > 0.0, we do not mark as exhausted.
+        # Unknown groups must never mark the credential exhausted - the global
+        # minimum may come from a model this credential does not serve (#1)
         all_groups_known = all(v is not None for v in group_fractions.values())
         if all_groups_known and all(v <= 0.0 for v in group_fractions.values()):
             status_val = "exhausted"
-        elif not any(v is not None for v in group_fractions.values()) and remaining_fraction <= 0.0:
-            status_val = "exhausted"
 
         existing_status = self.credential.status or "active"
-        existing_reset_at = self.credential.reset_at
-        if existing_reset_at and existing_reset_at.tzinfo is None:
-            existing_reset_at = existing_reset_at.replace(tzinfo=timezone.utc)
 
         if existing_status in {"reauth_required", "disabled"}:
             status_val = existing_status
             quota_details = dict(self.credential.model_quotas or quota_details)
-        elif existing_status == "cooldown" and existing_reset_at and datetime.now(timezone.utc) < existing_reset_at:
-            status_val = "cooldown"
-            quota_details = dict(self.credential.model_quotas or quota_details)
+        elif existing_status == "cooldown":
+            # Cooldown expiry is tracked in Redis; do not treat reset_at as
+            # cooldown expiry (#6, N1)
+            cooldown_active = await redis_client.get(get_credential_cooldown_key(self.credential.id))
+            if cooldown_active:
+                status_val = "cooldown"
+                quota_details = dict(self.credential.model_quotas or quota_details)
         elif not load_ok or not quota_ok:
-            # Probe failure is not quota exhaustion — keep last known quotas for UI
-            # and avoid cascading cooldown→exhausted from synthetic zeros.
+            # Probe failure is not quota exhaustion - keep last known quotas for UI
+            # and avoid cascading cooldown->exhausted from synthetic zeros.
             status_val = "degraded"
             quota_details = dict(self.credential.model_quotas or {})
             if remaining_fraction is None:
@@ -1417,12 +1408,28 @@ class AntigravityProvider(BaseProvider):
         total_tokens = 1_000_000
         used_tokens = int(total_tokens * (1 - remaining_fraction))
 
-        if status_val == "cooldown" and existing_reset_at:
-            reset_at_val = existing_reset_at
-        elif status_val in {"reauth_required", "disabled"}:
+        if status_val in {"reauth_required", "disabled"}:
             reset_at_val = None
         elif reset_at_val is None:
             reset_at_val = datetime.now(timezone.utc) + timedelta(hours=24)
+
+        discovered_models = None
+        if quota_ok:
+            from app.core.constants import build_antigravity_models_from_available
+            models_dict = quota_data.get("models") or {}
+            if isinstance(models_dict, dict) and models_dict:
+                discovered_models = build_antigravity_models_from_available(models_dict.keys())
+
+        update_values = {
+            "quota_total_tokens": total_tokens,
+            "quota_used_tokens": used_tokens,
+            "last_check_at": datetime.now(timezone.utc),
+            "reset_at": reset_at_val,
+            "model_quotas": quota_details,
+            "status": status_val,
+        }
+        if discovered_models:
+            update_values["models"] = discovered_models
 
         from app.routing.selector import CredentialSelector
         state_token = await CredentialSelector._acquire_credential_state_lock(self.credential.id)
@@ -1435,14 +1442,7 @@ class AntigravityProvider(BaseProvider):
                             Credential.id == self.credential.id,
                             Credential.status == existing_status,
                         )
-                        .values(
-                            quota_total_tokens=total_tokens,
-                            quota_used_tokens=used_tokens,
-                            last_check_at=datetime.now(timezone.utc),
-                            reset_at=reset_at_val,
-                            model_quotas=quota_details,
-                            status=status_val,
-                        )
+                        .values(**update_values)
                     )
                     await db.execute(stmt)
                     await db.commit()
@@ -1450,6 +1450,15 @@ class AntigravityProvider(BaseProvider):
                 await CredentialSelector._release_credential_state_lock(self.credential.id, state_token)
         else:
             logger.warning("Could not acquire credential state lock while saving quota for %s", self.credential.id)
+
+        if discovered_models:
+            self.credential.models = discovered_models
+        self.credential.model_quotas = quota_details
+        self.credential.status = status_val
+        self.credential.quota_total_tokens = total_tokens
+        self.credential.quota_used_tokens = used_tokens
+        self.credential.reset_at = reset_at_val
+        self.credential.last_check_at = update_values["last_check_at"]
 
         result = {
             "tier": tier,
@@ -1460,6 +1469,7 @@ class AntigravityProvider(BaseProvider):
             "reset_at": reset_at_val.isoformat() if reset_at_val else None,
             "model_quotas": quota_details,
             "status": status_val,
+            "models": discovered_models or self.credential.models,
             "raw_load": load_data,
             "raw_quota": quota_data,
         }

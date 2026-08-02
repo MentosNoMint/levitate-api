@@ -13,6 +13,7 @@ from app.providers.antigravity import AntigravityProvider
 from app.api.schemas.credential import CredentialCreate, CredentialUpdate
 from app.core.constants import DEFAULT_ANTIGRAVITY_MODELS, get_credential_access_token_key
 from app.redis_client import redis_client
+from app.security.egress import is_safe_url
 
 
 def _derive_display_status(cred: Credential) -> str:
@@ -117,6 +118,8 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
 
     ALLOWED_UPDATE_FIELDS = {"name", "provider", "base_url", "models", "quota_total_tokens",
                               "quota_window", "rpm_limit", "concurrency_limit", "priority", "weight", "status"}
+    # Nullable fields may be explicitly cleared with null (#22)
+    NULLABLE_UPDATE_FIELDS = {"base_url", "models", "quota_total_tokens", "quota_window", "rpm_limit", "concurrency_limit"}
     secret_changed = False
     reactivated = False
 
@@ -128,7 +131,9 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
             continue
         elif k not in ALLOWED_UPDATE_FIELDS:
             continue
-        elif v is not None:
+        elif v is None and k not in NULLABLE_UPDATE_FIELDS:
+            continue
+        else:
             if k == "status" and v == "active" and cred.status != "active":
                 reactivated = True
             setattr(cred, k, v)
@@ -141,13 +146,16 @@ async def update_credential(db: AsyncSession, credential_id: uuid.UUID, payload:
     if reactivated:
         cred.reset_at = None
 
-    if cred.type == "antigravity":
+    # Antigravity models are owned by fetchAvailableModels sync.
+    # Only seed the bootstrap catalog when the list is empty.
+    if cred.type == "antigravity" and not cred.models:
         cred.models = DEFAULT_ANTIGRAVITY_MODELS
-        if secret_changed or reactivated:
-            cred.model_quotas = {}
-            cred.reset_at = None
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(cred, "model_quotas")
+
+    if cred.type == "antigravity" and (secret_changed or reactivated):
+        cred.model_quotas = {}
+        cred.reset_at = None
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(cred, "model_quotas")
 
     await db.commit()
     if secret_changed or reactivated:
@@ -180,6 +188,10 @@ async def test_credential(db: AsyncSession, credential_id: uuid.UUID, user_id: u
                 return {"status": "failed", "error": err_msg}
             return {"status": "success", "message": "Credential connects successfully"}
         else:
+            # The test request hits cred.base_url directly — apply the same
+            # egress safety check as the request path (SSRF vector) (#12)
+            if cred.base_url and not await is_safe_url(cred.base_url):
+                return {"status": "failed", "error": "base_url rejected by the egress safety check"}
             provider = BYOUpstreamProvider(cred)
             model = cred.models[0] if cred.models else "gpt-3.5-turbo"
             await provider.chat_completion(

@@ -52,11 +52,17 @@ else:
 def get_google_oauth_configured() -> bool:
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
-def get_login_url(action: Optional[str] = None, token: Optional[str] = None) -> str:
+async def get_login_url(action: Optional[str] = None, token: Optional[str] = None) -> str:
     if action == "add_credential" and token:
         client_id = ANTIGRAVITY_OAUTH_CLIENT_ID
         scopes = "https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email%20https://www.googleapis.com/auth/userinfo.profile%20https://www.googleapis.com/auth/cclog%20https://www.googleapis.com/auth/experimentsandconfigs"
-        state = quote(f"action=add_credential&token={token}")
+        # Keep the admin session token out of the URL: store it server-side
+        # behind a short-lived random state id (#11)
+        import secrets as _secrets
+        from app.redis_client import redis_client
+        state_id = _secrets.token_urlsafe(16)
+        await redis_client.set(f"gateway:oauth_state:{state_id}", token, ex=600)
+        state = quote(f"action=add_credential&sid={state_id}")
         prompt_params = "&access_type=offline&prompt=consent"
     else:
         if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -89,7 +95,13 @@ async def handle_oauth_callback(code: str, state: Optional[str], db: AsyncSessio
         decoded_state = unquote(state)
         parsed_state = parse_qs(decoded_state)
         action = parsed_state.get("action", [None])[0]
-        admin_token = parsed_state.get("token", [None])[0]
+        sid = parsed_state.get("sid", [None])[0]
+        if sid:
+            # One-time server-side lookup — the session token never travels
+            # through URLs, browser history or Google (#11)
+            from app.redis_client import redis_client
+            admin_token = await redis_client.get(f"gateway:oauth_state:{sid}")
+            await redis_client.delete(f"gateway:oauth_state:{sid}")
 
     if action != "add_credential":
         if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -263,15 +275,18 @@ async def handle_token_login(token: str, client_ip: str, db: AsyncSession) -> st
             detail="Too many login attempts. Please try again later."
         )
         
-    await redis_client.incrby(limit_key, 1)
-    await redis_client.expire(limit_key, 60)
-    
     if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        # Count only failed attempts — pre-incrementing let anyone lock out a
+        # legitimate admin IP by sending 5 bogus requests (#29)
+        await redis_client.incrby(limit_key, 1)
+        attempts_ttl = await redis_client.ttl(limit_key)
+        if attempts_ttl is None or attempts_ttl < 0:
+            await redis_client.expire(limit_key, 60)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin token."
         )
-        
+
     await redis_client.delete(limit_key)
     
     admin_email = "dev-user@levitate.ai" if app_env != "production" else (ALLOWED_ADMIN_EMAILS[0] if ALLOWED_ADMIN_EMAILS else "admin@levitate.ai")

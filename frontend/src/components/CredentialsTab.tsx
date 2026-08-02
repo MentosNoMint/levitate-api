@@ -661,7 +661,7 @@ export default function CredentialsTab() {
                                       
                                       <div className="flex flex-col gap-1.5">
                                         <label htmlFor={`quota-${cred.id}`} className="text-xs font-semibold text-[var(--text-muted)]">
-                                          {language === "en" ? "Token Quota" : "Квота токенов"}
+                                          {t.credentials.lbl_token_quota}
                                         </label>
                                         <input
                                           id={`quota-${cred.id}`}

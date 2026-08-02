@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { usePathname } from "next/navigation";
 import { useDashboardStore } from "@/store/dashboardStore";
 
 interface AppBootstrapProps {
@@ -17,7 +16,6 @@ export default function AppBootstrap({ children }: AppBootstrapProps) {
   const fetchData = useDashboardStore((state) => state.fetchData);
   const setTheme = useDashboardStore((state) => state.setTheme);
   const setLanguage = useDashboardStore((state) => state.setLanguage);
-  const pathname = usePathname();
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -83,9 +81,10 @@ export default function AppBootstrap({ children }: AppBootstrapProps) {
     };
 
     initializeAuth();
-    // Run initialization on mount or when route changes if token is not yet established
+    // Run once on mount: zustand actions are stable, and re-running on every
+    // route/token change duplicated /auth/config and /auth/me requests (#27)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, token, setToken, fetchConfig, fetchUser]);
+  }, [setToken, fetchConfig, fetchUser]);
 
   useEffect(() => {
     if (user && token) {

@@ -11,6 +11,7 @@ from app.core.constants import (
     SESSION_BINDING_LOCK_TTL_SECONDS,
     SESSION_BINDING_TTL_SECONDS,
     get_credential_concurrency_key,
+    get_credential_cooldown_key,
     get_credential_tokens_key,
     get_lock_credential_key,
     get_model_quota_group,
@@ -47,8 +48,10 @@ class CredentialSelector:
     @classmethod
     def _model_matches(cls, credential: Credential, model_name: str) -> bool:
         normalized = cls._normalize_model(model_name)
+        # Antigravity cannot serve embeddings (provider raises 501);
+        # selecting it here only throws the account into degraded (#3)
         if credential.type == "antigravity" and ("embedding" in normalized or normalized.startswith("text-embedding")):
-            return True
+            return False
         return bool(
             credential.models
             and any(
@@ -58,13 +61,26 @@ class CredentialSelector:
             )
         )
 
-    @staticmethod
-    def _quota_value(credential: Credential, model_name: str) -> Optional[float]:
+    @classmethod
+    def _quota_value(cls, credential: Credential, model_name: str) -> Optional[float]:
+        """Per-model quota first, then group fallback (#1)."""
         quotas = credential.model_quotas or {}
+        if model_name and model_name in quotas:
+            try:
+                return float(quotas[model_name])
+            except (TypeError, ValueError):
+                pass
+        targets = {cls._normalize_model(model_name)} if model_name else set()
+        for key, val in quotas.items():
+            if key.startswith("_group:"):
+                continue
+            if cls._normalize_model(key) in targets:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    continue
         group_key = f"_group:{get_model_quota_group(model_name)}"
         value = quotas.get(group_key)
-        if value is None:
-            value = quotas.get(model_name)
         try:
             return None if value is None else float(value)
         except (TypeError, ValueError):
@@ -102,8 +118,21 @@ class CredentialSelector:
             reset_at = credential.reset_at
             if reset_at and reset_at.tzinfo is None:
                 reset_at = reset_at.replace(tzinfo=timezone.utc)
+
+            # Cooldown is an ephemeral Redis key; do not revive solely via reset_at.
+            # Clearing cooldown must not reset quota counters (#6).
+            if credential.status == "cooldown":
+                cooldown_present = await redis_client.get(get_credential_cooldown_key(credential.id))
+                if cooldown_present:
+                    continue
+                if credential.type == "antigravity" and cls._all_antigravity_groups_exhausted(credential):
+                    credential.status = "exhausted"
+                else:
+                    credential.status = "active"
+                changed = True
+
             if credential.type != "antigravity" and reset_at and now >= reset_at and credential.status in {
-                "active", "cooldown", "exhausted"
+                "active", "exhausted"
             }:
                 credential.quota_used_tokens = 0
                 credential.status = "active"
@@ -113,13 +142,6 @@ class CredentialSelector:
                     else None
                 )
                 await redis_client.set(get_credential_tokens_key(credential.id), "0")
-                changed = True
-            elif credential.status == "cooldown" and reset_at and now >= reset_at:
-                if credential.type == "antigravity" and cls._all_antigravity_groups_exhausted(credential):
-                    credential.status = "exhausted"
-                else:
-                    credential.status = "active"
-                credential.reset_at = None
                 changed = True
             elif credential.type == "antigravity" and credential.status == "exhausted":
                 # Repair only a fully populated stale global status. If a quota
@@ -441,11 +463,15 @@ class CredentialSelector:
         await redis_client.decrby_nonnegative(concurrency_key, 1)
 
         if actual_tokens_used > 0:
-            new_tokens_used = await redis_client.incrby(tokens_key, actual_tokens_used)
             credential_uuid = uuid.UUID(str(credential_id)) if isinstance(credential_id, str) else credential_id
             result = await db.execute(select(Credential).where(Credential.id == credential_uuid))
             credential = result.scalar_one_or_none()
             if credential:
+                # If the Redis counter was lost (restart/eviction), re-seed it from
+                # the DB before incrementing. A bare INCRBY would start from 0 and
+                # the tiny result would overwrite the accumulated DB quota (#4).
+                await redis_client.set(tokens_key, str(credential.quota_used_tokens or 0), nx=True)
+                new_tokens_used = await redis_client.incrby(tokens_key, actual_tokens_used)
                 credential.quota_used_tokens = new_tokens_used
                 await db.commit()
 

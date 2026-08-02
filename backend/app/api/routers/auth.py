@@ -34,7 +34,7 @@ async def auth_token_login(
 
 @router.get("/login")
 async def auth_login(action: Optional[str] = Query(None), token: Optional[str] = Query(None)):
-    url = auth_service.get_login_url(action, token)
+    url = await auth_service.get_login_url(action, token)
     return RedirectResponse(url=url)
 
 @router.get("/callback")

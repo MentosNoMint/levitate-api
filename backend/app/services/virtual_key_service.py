@@ -75,7 +75,8 @@ async def update_virtual_key(
         raise HTTPException(status_code=404, detail="Virtual Key not found")
 
     for k, v in payload.model_dump(exclude_unset=True).items():
-        if k in ["monthly_token_limit", "rpm_limit"]:
+        # These fields may be explicitly cleared with null (#22)
+        if k in ["monthly_token_limit", "rpm_limit", "allowed_model_groups"]:
             setattr(vkey, k, v)
         elif v is not None:
             setattr(vkey, k, v)

@@ -39,7 +39,9 @@ async def get_stats(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
 
     success_rate = (success_count / total_requests) if total_requests > 0 else 1.0
 
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    # Align the query window with the histogram's start_hour (computed
+    # below) so events stop falling between the two windows (#23)
+    since = (datetime.now(timezone.utc) - timedelta(hours=23)).replace(minute=0, second=0, microsecond=0)
     history_stmt = select(
         UsageEvent.created_at,
         UsageEvent.prompt_tokens,
@@ -127,7 +129,9 @@ async def clear_logs(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
 
     if user_vkey_ids:
         await db.execute(delete(UsageEvent).where(UsageEvent.virtual_key_id.in_(user_vkey_ids)))
-        await db.execute(delete(AuditLog))
+        # Only simulation entries are written to audit_logs today; scope the
+        # delete so any future/system audit records survive a "clear logs" (#9)
+        await db.execute(delete(AuditLog).where(AuditLog.event_type == "simulation"))
         await db.commit()
     return {"status": "cleared"}
 
@@ -216,6 +220,15 @@ async def simulate_log(db: AsyncSession, user_id: uuid.UUID, model: str = None, 
         status_str = "error"
 
     cost = (prompt_tokens + completion_tokens) * 0.000015
+
+    # Charge the credential's quota for the real test request — simulations
+    # consume provider quota and must not bypass accounting (#13).
+    # BYO only: antigravity quota is enforced on Google's side.
+    if status_str == "success" and cred.type != "antigravity":
+        total_tokens = prompt_tokens + completion_tokens
+        if total_tokens > 0:
+            from app.routing.selector import CredentialSelector
+            await CredentialSelector.release(str(cred.id), total_tokens, db)
     
     event = UsageEvent(
         virtual_key_id=vkey.id,
@@ -237,7 +250,7 @@ async def simulate_log(db: AsyncSession, user_id: uuid.UUID, model: str = None, 
             "cost": cost,
             "real_request": True,
             "error": err_msg,
-            "prompt": prompt,
+            "prompt": prompt[:200] if prompt else None,
             "response": response_content[:500] if response_content else None
         }
     )

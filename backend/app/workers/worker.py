@@ -1,26 +1,15 @@
 import asyncio
-import logging
 from datetime import datetime, timezone, timedelta
-
-from sqlalchemy import and_, or_, select
-
-from app.core.constants import get_credential_concurrency_key, get_credential_tokens_key
-from app.db.models import Credential
+from sqlalchemy import select
 from app.db.session import AsyncSessionLocal
-from app.providers.antigravity import AntigravityProvider
-from app.providers.byo_upstream import BYOUpstreamProvider
+from app.db.models import Credential
 from app.redis_client import redis_client
+from app.providers.byo_upstream import BYOUpstreamProvider
+from app.providers.antigravity import AntigravityProvider
+from app.core.constants import get_credential_tokens_key, get_credential_concurrency_key, get_credential_cooldown_key
+import logging
 
 logger = logging.getLogger(__name__)
-
-
-def _antigravity_groups_exhausted(credential: Credential) -> bool:
-    quotas = credential.model_quotas or {}
-    try:
-        return all(float(quotas[key]) <= 0.0 for key in ("_group:gemini", "_group:others"))
-    except (KeyError, TypeError, ValueError):
-        return False
-
 
 async def periodic_quota_resets():
     while True:
@@ -28,174 +17,209 @@ async def periodic_quota_resets():
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
                 stmt = select(Credential).where(
-                    or_(
-                        and_(
-                            Credential.type != "antigravity",
-                            Credential.status.notin_(["reauth_required", "disabled"]),
-                            Credential.reset_at.is_not(None),
-                            Credential.reset_at <= now,
-                        ),
-                        and_(
-                            Credential.status == "cooldown",
-                            Credential.reset_at.is_not(None),
-                            Credential.reset_at <= now,
-                        ),
-                    )
+                    ((Credential.reset_at <= now) & (Credential.type != "antigravity")) |
+                    (Credential.status == "cooldown")
                 )
-                credentials = (await db.execute(stmt)).scalars().all()
-                for credential in credentials:
-                    if credential.status == "cooldown":
-                        if credential.type == "antigravity" and _antigravity_groups_exhausted(credential):
-                            credential.status = "exhausted"
-                        else:
-                            credential.status = "active"
-                        credential.reset_at = None
+                result = await db.execute(stmt)
+                credentials = result.scalars().all()
+
+                for cred in credentials:
+                    if cred.status == "cooldown":
+                        # Cooldown is tracked by an ephemeral Redis key. Reviving a
+                        # cooled-down credential must NEVER touch quota counters or
+                        # reset_at — a 429 is not a quota-window expiry (#6, N1).
+                        cooldown_key = get_credential_cooldown_key(cred.id)
+                        if await redis_client.get(cooldown_key):
+                            continue
+                        cred.status = "active"
+                        # Fall through: if the quota window also expired while the
+                        # credential was cooling down, reset counters below.
+
+                    # Quota window expiry only (query already excludes antigravity
+                    # from the reset_at branch; antigravity cooldown revival above
+                    # must not zero counters — fetch_quota owns that state)
+                    if cred.type == "antigravity":
                         continue
 
-                    # Only ordinary credentials have a local quota counter that
-                    # can be reset on a timer. AG quota state comes from Google.
-                    if credential.type != "antigravity":
-                        credential.quota_used_tokens = 0
-                        credential.status = "active"
-                        await redis_client.set(get_credential_tokens_key(credential.id), "0")
-                        await redis_client.set(get_credential_concurrency_key(credential.id), "0")
-                        credential.reset_at = (
-                            now + timedelta(seconds=credential.quota_window)
-                            if credential.quota_window
-                            else None
-                        )
+                    reset_at = cred.reset_at
+                    if reset_at is None:
+                        continue
+                    if reset_at.tzinfo is None:
+                        reset_at = reset_at.replace(tzinfo=timezone.utc)
+                    if now < reset_at:
+                        continue
+
+                    cred.quota_used_tokens = 0
+                    cred.status = "active"
+
+                    tokens_key = get_credential_tokens_key(cred.id)
+                    concurrency_key = get_credential_concurrency_key(cred.id)
+                    await redis_client.set(tokens_key, "0")
+                    await redis_client.set(concurrency_key, "0")
+
+                    if cred.quota_window:
+                        # Roll forward from the previous reset_at (not from now)
+                        # so the quota window does not drift (#16)
+                        new_reset = reset_at + timedelta(seconds=cred.quota_window)
+                        while new_reset <= now:
+                            new_reset += timedelta(seconds=cred.quota_window)
+                        cred.reset_at = new_reset
+                    else:
+                        cred.reset_at = None
+
                 await db.commit()
-        except Exception as exc:
-            logger.exception("Error in periodic_quota_resets: %s", exc)
+        except Exception as e:
+            logger.exception("Error in periodic_quota_resets: %s", e)
         await asyncio.sleep(10)
 
-
-async def check_credential_health(credential: Credential) -> bool:
-    if credential.status in {"reauth_required", "disabled"}:
-        return False
-    if credential.status == "cooldown" and credential.reset_at:
-        reset_at = credential.reset_at
-        if reset_at.tzinfo is None:
-            reset_at = reset_at.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) < reset_at:
-            return False
+async def check_credential_health(cred: Credential) -> bool:
     try:
-        if credential.type == "antigravity":
-            result = await AntigravityProvider(credential).fetch_quota()
-            return result.get("status") in ("active", "exhausted")
-        model = credential.models[0] if credential.models else "gpt-3.5-turbo"
-        await BYOUpstreamProvider(credential).chat_completion(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1,
-        )
-        return True
+        if cred.type == "antigravity":
+            provider = AntigravityProvider(cred)
+            res = await provider.fetch_quota()
+            if res.get("status") in ("active", "exhausted"):
+                return True
+            return False
+        else:
+            provider = BYOUpstreamProvider(cred)
+            model = cred.models[0] if cred.models else "gpt-3.5-turbo"
+            await provider.chat_completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1
+            )
+            return True
     except Exception:
         return False
-
 
 async def periodic_health_checks():
     while True:
         try:
             async with AsyncSessionLocal() as db:
-                credentials = (await db.execute(select(Credential))).scalars().all()
-                credentials_data = [
+                stmt = select(Credential)
+                result = await db.execute(stmt)
+                creds_data = [
                     {
-                        "id": credential.id,
-                        "type": credential.type,
-                        "name": credential.name,
-                        "provider": credential.provider,
-                        "encrypted_secret": credential.encrypted_secret,
-                        "base_url": credential.base_url,
-                        "models": credential.models,
-                        "status": credential.status,
+                        "id": cred.id,
+                        "type": cred.type,
+                        "name": cred.name,
+                        "provider": cred.provider,
+                        "encrypted_secret": cred.encrypted_secret,
+                        "base_url": cred.base_url,
+                        "models": cred.models,
+                        "status": cred.status,
+                        "last_check_at": cred.last_check_at,
+                        "quota_total_tokens": cred.quota_total_tokens,
+                        "quota_used_tokens": cred.quota_used_tokens,
+                        "reset_at": cred.reset_at,
+                        "model_quotas": cred.model_quotas,
                     }
-                    for credential in credentials
+                    for cred in result.scalars().all()
                 ]
 
-            for data in credentials_data:
-                temporary = Credential(**data)
-                healthy = await check_credential_health(temporary)
+            for cred_data in creds_data:
+                # Include last_check_at/model_quotas/quota fields so
+                # fetch_quota's 15-minute cache actually engages (#2)
+                temp_cred = Credential(
+                    id=cred_data["id"],
+                    type=cred_data["type"],
+                    name=cred_data["name"],
+                    provider=cred_data["provider"],
+                    encrypted_secret=cred_data["encrypted_secret"],
+                    base_url=cred_data["base_url"],
+                    models=cred_data["models"],
+                    status=cred_data["status"],
+                    last_check_at=cred_data["last_check_at"],
+                    quota_total_tokens=cred_data["quota_total_tokens"],
+                    quota_used_tokens=cred_data["quota_used_tokens"],
+                    reset_at=cred_data["reset_at"],
+                    model_quotas=cred_data["model_quotas"]
+                )
+                is_healthy = await check_credential_health(temp_cred)
                 now = datetime.now(timezone.utc)
+                
                 async with AsyncSessionLocal() as db:
-                    result = await db.execute(select(Credential).where(Credential.id == temporary.id))
-                    credential = result.scalar_one_or_none()
-                    if not credential:
-                        continue
-                    if credential.status in {"reauth_required", "disabled", "exhausted"}:
-                        credential.last_check_at = now
+                    stmt = select(Credential).where(Credential.id == temp_cred.id)
+                    res = await db.execute(stmt)
+                    db_cred = res.scalar_one_or_none()
+                    if db_cred:
+                        if is_healthy:
+                            if temp_cred.type == "antigravity":
+                                # Antigravity status is managed by fetch_quota, don't overwrite
+                                pass
+                            else:
+                                # Only reset to active from degraded or expired cooldown
+                                # Never overwrite 'exhausted' — that requires quota reset
+                                if db_cred.status == "degraded":
+                                    db_cred.status = "active"
+                                # Cooldown revival is periodic_quota_resets' job and
+                                # is driven by the Redis cooldown key, not reset_at (N3)
+                        else:
+                            if temp_cred.type != "antigravity":
+                                db_cred.status = "degraded"
+                        db_cred.last_check_at = now
                         await db.commit()
-                        continue
-                    if healthy and credential.type != "antigravity":
-                        if credential.status in {"degraded", "error"}:
-                            credential.status = "active"
-                        elif credential.status == "cooldown" and credential.reset_at:
-                            reset_at = credential.reset_at
-                            if reset_at.tzinfo is None:
-                                reset_at = reset_at.replace(tzinfo=timezone.utc)
-                            if now >= reset_at:
-                                credential.status = "active"
-                                credential.reset_at = None
-                    elif not healthy and credential.type != "antigravity":
-                        # Probe failure is not quota exhaustion.
-                        credential.status = "degraded"
-                    credential.last_check_at = now
-                    await db.commit()
-        except Exception as exc:
-            logger.exception("Error in periodic_health_checks: %s", exc)
+        except Exception as e:
+            logger.exception("Error in periodic_health_checks: %s", e)
         await asyncio.sleep(300)
-
 
 async def periodic_token_refreshes():
     while True:
         try:
             async with AsyncSessionLocal() as db:
-                credentials = (await db.execute(
-                    select(Credential).where(
-                        Credential.type == "antigravity",
-                        Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
-                    )
-                )).scalars().all()
-                credentials_data = [
+                stmt = select(Credential).where(
+                    Credential.type == "antigravity",
+                    Credential.status.notin_(["reauth_required", "disabled", "exhausted"]),
+                )
+                result = await db.execute(stmt)
+                creds_data = [
                     {
-                        "id": credential.id,
-                        "type": credential.type,
-                        "name": credential.name,
-                        "provider": credential.provider,
-                        "encrypted_secret": credential.encrypted_secret,
+                        "id": cred.id,
+                        "type": cred.type,
+                        "name": cred.name,
+                        "provider": cred.provider,
+                        "encrypted_secret": cred.encrypted_secret,
                     }
-                    for credential in credentials
+                    for cred in result.scalars().all()
                 ]
 
-            for data in credentials_data:
-                temporary = Credential(**data)
+            for cred_data in creds_data:
+                temp_cred = Credential(
+                    id=cred_data["id"],
+                    type=cred_data["type"],
+                    name=cred_data["name"],
+                    provider=cred_data["provider"],
+                    encrypted_secret=cred_data["encrypted_secret"]
+                )
+                provider = AntigravityProvider(temp_cred)
                 try:
-                    await AntigravityProvider(temporary).get_access_token()
+                    await provider.get_access_token()
                 except Exception as exc:
                     async with AsyncSessionLocal() as db:
-                        result = await db.execute(select(Credential).where(Credential.id == temporary.id))
-                        credential = result.scalar_one_or_none()
-                        if not credential:
-                            continue
-                        if credential.status in {"reauth_required", "disabled", "exhausted"}:
-                            continue
-                        err = str(exc).lower()
-                        if "invalid_grant" in err:
-                            credential.status = "reauth_required"
-                            credential.reset_at = None
-                        else:
-                            # Network/5xx while refreshing must never mark exhausted/reauth.
-                            credential.status = "cooldown"
-                            credential.reset_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-                        await db.commit()
-        except Exception as exc:
-            logger.exception("Error in periodic_token_refreshes: %s", exc)
+                        stmt = select(Credential).where(Credential.id == temp_cred.id)
+                        res = await db.execute(stmt)
+                        db_cred = res.scalar_one_or_none()
+                        if db_cred:
+                            if db_cred.status in {"reauth_required", "disabled", "exhausted"}:
+                                continue
+                            err = str(exc).lower()
+                            if "invalid_grant" in err:
+                                db_cred.status = "reauth_required"
+                                db_cred.reset_at = None
+                                await db.commit()
+                            else:
+                                db_cred.status = "cooldown"
+                                await db.commit()
+                                # Cooldown expiry lives in Redis; reset_at keeps
+                                # tracking the quota window (#6, N1)
+                                await redis_client.set(get_credential_cooldown_key(db_cred.id), "1", ex=300)
+        except Exception as e:
+            logger.exception("Error in periodic_token_refreshes: %s", e)
         await asyncio.sleep(600)
-
 
 async def start_worker():
     await asyncio.gather(
         periodic_quota_resets(),
         periodic_health_checks(),
-        periodic_token_refreshes(),
+        periodic_token_refreshes()
     )

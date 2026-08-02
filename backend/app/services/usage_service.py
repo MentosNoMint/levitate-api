@@ -2,12 +2,13 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import get_vkey_rpm_key, get_vkey_tokens_key
+from app.core.constants import get_vkey_rpm_key, get_vkey_tokens_key, get_model_quota_group
 from app.core.error_classifier import classify_upstream_error_kind
 from app.db.models import VirtualKey, UsageEvent
 from app.redis_client import redis_client
@@ -18,10 +19,32 @@ from app.security.egress import scan_for_leak, scan_for_regex_leaks
 logger = logging.getLogger(__name__)
 
 
+def _seconds_until_next_month() -> int:
+    now = datetime.now(timezone.utc)
+    if now.month == 12:
+        nxt = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nxt = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((nxt - now).total_seconds()))
+
+
+async def incr_vkey_monthly_tokens(vkey_id, tokens: int) -> None:
+    """Add to the virtual key's monthly usage; the counter expires at the end
+    of the calendar month so the monthly limit actually resets (#7)."""
+    token_key = get_vkey_tokens_key(vkey_id)
+    await redis_client.incrby(token_key, tokens)
+    ttl = await redis_client.ttl(token_key)
+    if ttl is None or ttl < 0:
+        await redis_client.expire(token_key, _seconds_until_next_month())
+
+
 async def check_key_limits(vkey: VirtualKey, model_name: str) -> None:
     if vkey.allowed_model_groups:
-        allowed = any(group.lower() in model_name.lower() for group in vkey.allowed_model_groups)
-        if not allowed:
+        # Classify the model the same way routing does; a substring match can
+        # never satisfy the "others" group and over-matches "gemini" (#8)
+        model_group = get_model_quota_group(model_name)
+        allowed_groups = {str(g).strip().lower() for g in vkey.allowed_model_groups}
+        if model_group not in allowed_groups:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Model {model_name} is not allowed for this key",
@@ -30,7 +53,10 @@ async def check_key_limits(vkey: VirtualKey, model_name: str) -> None:
     if vkey.rpm_limit is not None:
         rpm_key = get_vkey_rpm_key(vkey.id)
         current_rpm = await redis_client.incrby(rpm_key, 1)
-        if current_rpm == 1:
+        # Re-arm the TTL whenever it is missing, not only on the first hit —
+        # a crash between INCRBY and EXPIRE must not brick the key forever (#20)
+        rpm_ttl = await redis_client.ttl(rpm_key)
+        if rpm_ttl is None or rpm_ttl < 0:
             await redis_client.expire(rpm_key, 60)
         if current_rpm > vkey.rpm_limit:
             raise HTTPException(
@@ -140,7 +166,7 @@ async def stream_response_generator(
             async with AsyncSessionLocal() as local_db:
                 await CredentialSelector.release(str(cred.id), total_tokens, local_db)
                 if vkey.id and total_tokens > 0:
-                    await redis_client.incrby(get_vkey_tokens_key(vkey.id), total_tokens)
+                    await incr_vkey_monthly_tokens(vkey.id, total_tokens)
 
                 status_str = "success"
                 if stream_error is not None:

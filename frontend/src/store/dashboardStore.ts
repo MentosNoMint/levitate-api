@@ -279,8 +279,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           authMethod: data.auth_method || "both"
         });
       }
-    } catch {
-      // Ignored config error fallback
+    } catch (e) {
+      console.error("dashboardStore: fetchConfig failed", e);
     }
   },
 
@@ -302,7 +302,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           document.cookie = "auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
         }
       }
-    } catch {
+    } catch (e) {
+      console.error("dashboardStore: fetchUser failed", e);
       set({ user: null, isAuthLoading: false });
     }
   },
@@ -320,15 +321,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!token) return;
     set({ isLoading: true });
     try {
-      const [keysResp, credsResp, statsResp, logsResp] = await Promise.all([
+      // allSettled: one failing endpoint must not blank the whole dashboard (#24)
+      const [keysRes, credsRes, statsRes, logsRes] = await Promise.allSettled([
         apiFetch("/admin/virtual-keys", {}, token),
         apiFetch("/admin/credentials", {}, token),
         apiFetch("/admin/stats", {}, token),
         apiFetch("/admin/logs", {}, token),
       ]);
+      const keysResp = keysRes.status === "fulfilled" ? keysRes.value : null;
+      const credsResp = credsRes.status === "fulfilled" ? credsRes.value : null;
+      const statsResp = statsRes.status === "fulfilled" ? statsRes.value : null;
+      const logsResp = logsRes.status === "fulfilled" ? logsRes.value : null;
 
       let virtualKeys: VirtualKey[] = [];
-      if (keysResp.ok) {
+      if (keysResp?.ok) {
         const keysData = await keysResp.json() as BackendVirtualKey[];
         virtualKeys = keysData.map((k) => ({
           id: k.id,
@@ -343,7 +349,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
 
       let credentials: Credential[] = [];
-      if (credsResp.ok) {
+      if (credsResp?.ok) {
         const credsData = await credsResp.json() as BackendCredential[];
         credentials = credsData.map((c) => ({
           id: c.id,
@@ -371,7 +377,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
 
       let logs: UsageLog[] = [];
-      if (logsResp.ok) {
+      if (logsResp?.ok) {
         const logsData = await logsResp.json() as BackendLogsResponse;
         logs = logsData.usage_events.map((u) => {
           const vkey = virtualKeys.find((k) => k.id === u.virtual_key_id);
@@ -401,7 +407,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         tokenUsageHistory: [],
       };
 
-      if (statsResp.ok) {
+      if (statsResp?.ok) {
         const statsData = await statsResp.json() as BackendStatsResponse;
         const activePools = credentials.filter((c) => c.status === "active").length;
         stats = {
@@ -414,7 +420,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
 
       set({ virtualKeys, credentials, logs, stats, isLoading: false });
-    } catch {
+    } catch (e) {
+      console.error("dashboardStore: fetchData failed", e);
       set({ isLoading: false });
     }
   },
@@ -426,8 +433,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         method: "POST",
         body: JSON.stringify({
           name,
-          monthly_token_limit: monthlyLimit || null,
-          rpm_limit: rpmLimit || null,
+          // Explicit: only positive limits are sent; 0/empty means "unlimited" (#26)
+          monthly_token_limit: monthlyLimit > 0 ? monthlyLimit : null,
+          rpm_limit: rpmLimit > 0 ? rpmLimit : null,
         }),
       }, token);
 
@@ -436,8 +444,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         set({ lastGeneratedKey: res.key });
         await fetchData();
       }
-    } catch {
-      // Handled error state
+    } catch (e) {
+      console.error("dashboardStore: addVirtualKey failed", e);
     }
   },
 
@@ -452,8 +460,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         body: JSON.stringify({ status: nextStatus }),
       }, token);
       await fetchData();
-    } catch {
-      // Ignored update error fallback
+    } catch (e) {
+      console.error("dashboardStore: toggleVirtualKeyStatus failed", e);
     }
   },
 
@@ -463,13 +471,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       await apiFetch(`/admin/virtual-keys/${id}`, {
         method: "PUT",
         body: JSON.stringify({
-          monthly_token_limit: monthlyLimit || null,
-          rpm_limit: rpmLimit || null,
+          // Explicit: only positive limits are sent; 0/empty means "unlimited" (#26)
+          monthly_token_limit: monthlyLimit > 0 ? monthlyLimit : null,
+          rpm_limit: rpmLimit > 0 ? rpmLimit : null,
         }),
       }, token);
       await fetchData();
-    } catch {
-      // Ignored budget edit error fallback
+    } catch (e) {
+      console.error("dashboardStore: updateVirtualKeyBudget failed", e);
     }
   },
 
@@ -480,8 +489,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         method: "DELETE",
       }, token);
       await fetchData();
-    } catch {
-      // Ignored delete error fallback
+    } catch (e) {
+      console.error("dashboardStore: delete failed", e);
     }
   },
 
@@ -506,7 +515,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         }),
       }, token);
       await fetchData();
-    } catch {
+    } catch (e) {
+      console.error("dashboardStore: credential mutation failed", e);
     }
   },
 
@@ -525,7 +535,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         }),
       }, token);
       await fetchData();
-    } catch {
+    } catch (e) {
+      console.error("dashboardStore: credential mutation failed", e);
     }
   },
 
@@ -537,8 +548,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         body: JSON.stringify({ status }),
       }, token);
       await fetchData();
-    } catch {
-      // Ignored status edit error fallback
+    } catch (e) {
+      console.error("dashboardStore: toggleCredentialStatus failed", e);
     }
   },
 
@@ -566,8 +577,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       await apiFetch("/admin/logs", { method: "DELETE" }, token);
       await fetchData();
-    } catch {
-      // Ignored logs clear error fallback
+    } catch (e) {
+      console.error("dashboardStore: clearLogs failed", e);
     }
   },
 
@@ -576,8 +587,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       await apiFetch(`/admin/credentials/${id}`, { method: "DELETE" }, token);
       await fetchData();
-    } catch {
-      // Ignored delete error fallback
+    } catch (e) {
+      console.error("dashboardStore: delete failed", e);
     }
   },
 
@@ -586,8 +597,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       await apiFetch(`/admin/credentials/${id}/refresh-quota`, { method: "POST" }, token);
       await fetchData();
-    } catch {
-      // Ignored refresh quota error fallback
+    } catch (e) {
+      console.error("dashboardStore: refreshCredentialQuota failed", e);
     }
   },
 
@@ -596,8 +607,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       await apiFetch("/admin/credentials/refresh-all-quotas", { method: "POST" }, token);
       await fetchData();
-    } catch {
-      // Ignored refresh all quotas error fallback
+    } catch (e) {
+      console.error("dashboardStore: refreshAllQuotas failed", e);
     }
   },
 

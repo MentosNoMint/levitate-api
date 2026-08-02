@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class CredentialCreate(BaseModel):
     type: str
@@ -8,12 +8,12 @@ class CredentialCreate(BaseModel):
     secret: str
     base_url: Optional[str] = None
     models: Optional[List[str]] = None
-    quota_total_tokens: Optional[int] = None
-    quota_window: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    concurrency_limit: Optional[int] = None
-    priority: Optional[int] = 1
-    weight: Optional[int] = 1
+    quota_total_tokens: Optional[int] = Field(default=None, ge=0)
+    quota_window: Optional[int] = Field(default=None, ge=0)
+    rpm_limit: Optional[int] = Field(default=None, ge=0)
+    concurrency_limit: Optional[int] = Field(default=None, ge=0)
+    priority: Optional[int] = Field(default=1, ge=0)
+    weight: Optional[int] = Field(default=1, ge=0)
 
 class CredentialUpdate(BaseModel):
     type: Optional[str] = None
@@ -22,10 +22,10 @@ class CredentialUpdate(BaseModel):
     secret: Optional[str] = None
     base_url: Optional[str] = None
     models: Optional[List[str]] = None
-    quota_total_tokens: Optional[int] = None
-    quota_window: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    concurrency_limit: Optional[int] = None
-    priority: Optional[int] = None
-    weight: Optional[int] = None
+    quota_total_tokens: Optional[int] = Field(default=None, ge=0)
+    quota_window: Optional[int] = Field(default=None, ge=0)
+    rpm_limit: Optional[int] = Field(default=None, ge=0)
+    concurrency_limit: Optional[int] = Field(default=None, ge=0)
+    priority: Optional[int] = Field(default=None, ge=0)
+    weight: Optional[int] = Field(default=None, ge=0)
     status: Optional[str] = None
