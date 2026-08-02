@@ -15,6 +15,12 @@ from app.db.models import VirtualKey, Credential
 from app.crypto.cipher import decrypt_secret
 from app.security.egress import is_safe_url, scan_for_leak, scan_for_regex_leaks
 from app.routing.selector import CredentialSelector
+from app.routing.conversation_tip import (
+    extract_assistant_message,
+    remember_tip,
+    resolve_session_id_from_tips,
+    synthetic_tip_session_id,
+)
 from app.providers.byo_upstream import BYOUpstreamProvider
 from app.providers.antigravity import AntigravityProvider
 from app.services import usage_service
@@ -72,7 +78,16 @@ def _canonical_session_value(value: Any) -> str:
 
 
 def get_session_id(payload: dict, headers: Mapping[str, Any] | None = None) -> Optional[str]:
-    """Resolve a stable client conversation identity without random fallback."""
+    """Resolve an explicit client conversation identity from headers/body only.
+
+    Tip-hash sticky is a separate fallback applied in chat_completions when this
+    returns None.
+    """
+    return get_explicit_session_id(payload, headers)
+
+
+def get_explicit_session_id(payload: dict, headers: Mapping[str, Any] | None = None) -> Optional[str]:
+    """Headers/body session signals only — no silent message-hash fallback."""
     header_values = {str(key).lower(): value for key, value in (headers or {}).items()}
     for header_name in ("x-session-id", "x-session-affinity", "x-levitate-session-id"):
         value = _canonical_session_value(header_values.get(header_name, ""))
@@ -90,11 +105,6 @@ def get_session_id(payload: dict, headers: Mapping[str, Any] | None = None) -> O
         if value:
             return value[:512]
 
-    messages = payload.get("messages") or []
-    first_user = next((message for message in messages if isinstance(message, dict) and message.get("role") == "user"), None)
-    if first_user is not None:
-        digest = hashlib.sha256(_canonical_session_value(first_user).encode("utf-8")).hexdigest()
-        return f"first-user-{digest}"
     return None
 
 async def _handle_credential_failure(
@@ -206,9 +216,12 @@ async def chat_completions(
     token = authorization.split(" ")[1]
     exclude_ids = []
     estimated_tokens = 1000
-    session_id = get_session_id(payload, request.headers)
-    
     messages = payload.get("messages", [])
+    session_id = get_explicit_session_id(payload, request.headers)
+    if not session_id:
+        session_id = await resolve_session_id_from_tips(vkey.user_id, model_name, messages)
+        if not session_id and messages:
+            session_id = synthetic_tip_session_id(messages)
     stream = payload.get("stream", False)
     
     start_time = time.time()
@@ -243,6 +256,9 @@ async def chat_completions(
                 raise HTTPException(status_code=400, detail="Potential secret leak detected in request")
             
         await db.commit()
+        if session_id:
+            # Tip for the request messages helps identical retries reuse sticky.
+            await remember_tip(messages, vkey.user_id, model_name, session_id, cred.id)
         is_upstream_error = False
         credential_ready = False
         try:
@@ -271,7 +287,14 @@ async def chat_completions(
                 return StreamingResponse(
                     usage_service.stream_response_generator(
                         simple_cred, first_chunk, response, raw_secret, simple_vkey, matched_model, None, start_time,
-                        (vkey.user_id, session_id, matched_model, cred.type)
+                        (vkey.user_id, session_id, matched_model, cred.type),
+                        tip_context={
+                            "messages": messages,
+                            "user_id": vkey.user_id,
+                            "model": model_name,
+                            "session_id": session_id,
+                            "credential_id": cred.id,
+                        },
                     ),
                     media_type="text/event-stream"
                 )
@@ -300,6 +323,16 @@ async def chat_completions(
                     await redis_client.incrby(vkey_token_key, tokens_used)
                     
                 await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
+                if session_id:
+                    assistant_message = extract_assistant_message(response)
+                    if assistant_message is not None:
+                        await remember_tip(
+                            list(messages) + [assistant_message],
+                            vkey.user_id,
+                            model_name,
+                            session_id,
+                            cred.id,
+                        )
                 return response
                 
         except Exception as e:

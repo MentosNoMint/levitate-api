@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import os
 import sys
 import uuid
@@ -188,7 +187,8 @@ class TestSessionAffinity(IsolatedAsyncioTestCase):
             self.assertEqual(failover.id, self.second.id)
             await self._release(failover, db)
 
-    async def test_fallback_identity_is_stable_without_headers(self):
+    async def test_explicit_session_required_without_headers(self):
+        # Silent first-user hashing is gone; tip sticky is a separate fallback.
         first_payload = {"messages": [{"role": "user", "content": "remember this"}]}
         second_payload = {
             "messages": [
@@ -197,11 +197,8 @@ class TestSessionAffinity(IsolatedAsyncioTestCase):
                 {"role": "user", "content": "continue"},
             ]
         }
-        self.assertEqual(get_session_id(first_payload, {}), get_session_id(second_payload, {}))
-        expected = "first-user-" + hashlib.sha256(
-            '{"content":"remember this","role":"user"}'.encode()
-        ).hexdigest()
-        self.assertEqual(get_session_id(first_payload, {}), expected)
+        self.assertIsNone(get_session_id(first_payload, {}))
+        self.assertIsNone(get_session_id(second_payload, {}))
 
     async def test_header_and_body_identity_variants(self):
         payload = {"messages": [{"role": "user", "content": "x"}]}

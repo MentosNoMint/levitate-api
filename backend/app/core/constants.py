@@ -22,6 +22,7 @@ REDIS_KEY_CREDENTIAL_CONCURRENCY = "gateway:credential:{credential_id}:concurren
 REDIS_KEY_LOCK_CREDENTIAL = "gateway:lock:credential:{credential_id}"
 SESSION_BINDING_TTL_SECONDS = 24 * 60 * 60
 SESSION_BINDING_LOCK_TTL_SECONDS = 15
+CONVERSATION_TIP_TTL_SECONDS = SESSION_BINDING_TTL_SECONDS
 
 
 def get_vkey_rpm_key(vkey_id) -> str:
@@ -56,7 +57,7 @@ def get_session_binding_key(provider: str, user_id, session_id: str, model_name:
     """Return a non-sensitive, namespaced account binding key.
 
     Shape: gateway:session_binding:{provider}:{user_id}:{sha256(session)}:{sha256(model)}.
-    Session comes from X-Session-ID / body session_id / first-user message hash.
+    Session comes from X-Session-ID / body session_id / tip-hash sticky fallback.
     """
     return (
         f"gateway:session_binding:{provider}:{user_id}:"

@@ -82,10 +82,19 @@ async def stream_response_generator(
     db: Any,
     start_time: float,
     session_context: Optional[tuple] = None,
+    tip_context: Optional[dict] = None,
 ):
+    from app.routing.conversation_tip import (
+        accumulate_stream_delta,
+        build_assistant_message_from_stream,
+        new_stream_assistant_state,
+        remember_tip,
+    )
+
     total_prompt_tokens = 0
     total_completion_tokens = 0
     stream_error = None
+    assistant_state = new_stream_assistant_state() if tip_context else None
 
     async def iterate_chunks():
         yield first_chunk
@@ -94,6 +103,8 @@ async def stream_response_generator(
 
     try:
         async for chunk in iterate_chunks():
+            if assistant_state is not None:
+                accumulate_stream_delta(assistant_state, chunk)
             if hasattr(chunk, "model_dump_json"):
                 chunk_data = chunk.model_dump_json()
             else:
@@ -154,5 +165,22 @@ async def stream_response_generator(
                 await log_usage_event(
                     local_db, vkey.id, cred.id, model_name, usage_obj, latency_ms, status_str
                 )
+
+                if (
+                    stream_error is None
+                    and tip_context
+                    and tip_context.get("session_id")
+                    and assistant_state is not None
+                ):
+                    request_messages = tip_context.get("messages") or []
+                    if isinstance(request_messages, list) and request_messages:
+                        assistant_message = build_assistant_message_from_stream(assistant_state)
+                        await remember_tip(
+                            list(request_messages) + [assistant_message],
+                            tip_context.get("user_id"),
+                            tip_context.get("model") or model_name,
+                            tip_context.get("session_id"),
+                            tip_context.get("credential_id", getattr(cred, "id", None)),
+                        )
 
         await asyncio.shield(cleanup())
