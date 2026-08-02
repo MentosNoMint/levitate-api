@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from typing import Any, Mapping, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -570,7 +570,7 @@ async def get_props_v1():
 class ImageGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-3.1-flash-image"
-    n: Optional[int] = 1
+    n: Optional[int] = Field(default=1, ge=1, le=10)
     size: Optional[str] = "1024x1024"
     response_format: Optional[str] = "url"
 

@@ -40,7 +40,7 @@ from app.core.constants import get_model_quota_group, get_credential_cooldown_ke
 from app.redis_client import FakeRedis, RedisClientProxy, redis_client
 from app.db.models import Base, Credential, User
 from app.db.session import engine, AsyncSessionLocal
-from app.routing.selector import CredentialSelector, _antigravity_quota_blocked
+from app.routing.selector import CredentialSelector
 from app.providers.byo_upstream import BYOUpstreamProvider
 from app.services import usage_service, auth_service
 from app.api.schemas.virtual_key import VirtualKeyCreate
@@ -151,19 +151,21 @@ class TestByoPrefix(TestCase):
 class TestAntigravityQuotaBlocked(TestCase):
     def test_per_model_overrides_group(self):
         cred = types.SimpleNamespace(
+            type="antigravity",
+            status="active",
             model_quotas={
                 "_group:others": 0.0,
                 "claude-sonnet-4-6-thinking": 0.5,
             }
         )
-        self.assertFalse(_antigravity_quota_blocked(cred, "claude-sonnet-4-6-thinking"))
-        self.assertTrue(_antigravity_quota_blocked(cred, "claude-opus-4-6-thinking"))
+        self.assertTrue(CredentialSelector._model_quota_available(cred, "claude-sonnet-4-6-thinking"))
+        self.assertFalse(CredentialSelector._model_quota_available(cred, "claude-opus-4-6-thinking"))
 
     def test_group_fallback_when_model_missing(self):
-        cred = types.SimpleNamespace(model_quotas={"_group:gemini": 0.0})
-        self.assertTrue(_antigravity_quota_blocked(cred, "gemini-3.5-flash-low"))
-        cred2 = types.SimpleNamespace(model_quotas={"_group:gemini": 0.3})
-        self.assertFalse(_antigravity_quota_blocked(cred2, "gemini-3.5-flash-low"))
+        cred = types.SimpleNamespace(type="antigravity", status="active", model_quotas={"_group:gemini": 0.0})
+        self.assertFalse(CredentialSelector._model_quota_available(cred, "gemini-3.5-flash-low"))
+        cred2 = types.SimpleNamespace(type="antigravity", status="active", model_quotas={"_group:gemini": 0.3})
+        self.assertTrue(CredentialSelector._model_quota_available(cred2, "gemini-3.5-flash-low"))
 
 
 class TestFakeRedisTTL(IsolatedAsyncioTestCase):
