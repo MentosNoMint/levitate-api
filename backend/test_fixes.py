@@ -438,6 +438,80 @@ class TestWorkerCooldownLogic(IsolatedAsyncioTestCase):
             self.assertEqual(cred.quota_used_tokens, 99_000)
 
 
+
+
+class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
+    async def test_request_id_is_top_level_not_inside_request(self):
+        from unittest.mock import patch
+        from app.providers.antigravity import AntigravityProvider
+
+        captured = []
+
+        class FakeStreamResp:
+            status_code = 200
+            headers = {}
+
+            async def aread(self):
+                return b""
+
+            async def aiter_lines(self):
+                if False:
+                    yield ""
+                return
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def stream(self, method, url, headers=None, json=None):
+                captured.append(json)
+                return FakeStreamResp()
+
+        cred = types.SimpleNamespace(
+            id=uuid.uuid4(),
+            type="antigravity",
+            encrypted_secret="enc",
+            status="active",
+            models=["gemini-3.1-pro-high"],
+        )
+        provider = AntigravityProvider(cred)
+
+        async def fake_token(force_refresh=False):
+            return "token"
+
+        with patch("app.providers.antigravity.decrypt_secret", return_value='{"project_id":"proj"}'), \
+             patch.object(AntigravityProvider, "get_access_token", side_effect=fake_token), \
+             patch("app.providers.antigravity.httpx.AsyncClient", FakeClient):
+            gen = await provider.chat_completion(
+                model="gemini-3.1-pro-high",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                session_id="stable-session",
+            )
+            async for _ in gen:
+                pass
+
+        self.assertTrue(captured, "expected antigravity request body to be captured")
+        body = captured[0]
+        self.assertEqual(body.get("userAgent"), "antigravity")
+        self.assertTrue(str(body.get("requestId", "")).startswith("agent/"))
+        self.assertIn("request", body)
+        self.assertNotIn("requestId", body["request"])
+        self.assertEqual(body["request"].get("sessionId"), "stable-session")
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main(verbosity=2)

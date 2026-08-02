@@ -152,9 +152,12 @@ class TestProviderLifecycle(IsolatedAsyncioTestCase):
                 messages=messages,
                 session_id="stable-session",
             )
-        request = captured[0]["request"]
+        wrapper = captured[0]
+        request = wrapper["request"]
+        self.assertEqual(wrapper.get("userAgent"), "antigravity")
+        self.assertTrue(str(wrapper.get("requestId", "")).startswith("agent/"))
+        self.assertNotIn("requestId", request)
         self.assertEqual(request["sessionId"], "stable-session")
-        self.assertTrue(request["requestId"].startswith("agent/"))
         self.assertEqual([item["role"] for item in request["contents"]], ["user", "model", "user"])
         self.assertEqual(request["contents"][0]["parts"][0]["text"], "first")
         self.assertEqual(request["contents"][1]["parts"][0]["text"], "answer")

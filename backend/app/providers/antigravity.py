@@ -373,10 +373,12 @@ class AntigravityProvider(BaseProvider):
                         "parts": parts
                     })
 
+        # Antigravity proto: sessionId lives under request.*, but requestId /
+        # userAgent are top-level wrapper fields. Putting requestId inside
+        # request triggers HTTP 400 UNKNOWN_FIELD (seen on gemini-3.1-pro-high).
         request_body = {
             "contents": contents,
             "sessionId": session_id,
-            "requestId": request_id,
         }
         if system_instruction:
             request_body["systemInstruction"] = system_instruction
@@ -492,7 +494,9 @@ class AntigravityProvider(BaseProvider):
         body = {
             "project": project_id,
             "model": mapped_model,
-            "request": request_body
+            "userAgent": "antigravity",
+            "requestId": request_id,
+            "request": request_body,
         }
         logger.debug(
             "Prepared Antigravity request model=%s session=%s request=%s",
