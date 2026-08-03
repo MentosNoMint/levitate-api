@@ -2,18 +2,20 @@
 
 ## Зачем
 
-Сервер в регионе, где Google Cloud Code / Gemini API недоступен, получает ошибки вроде:
+Сервер в регионе, где Google Cloud Code / Gemini API недоступен, может получать ошибки вроде:
 
 - `User location is not supported`
 - `not available in your country`
 
-Cloudflare Worker принимает запросы с вашего сервера и проксирует их на `*.googleapis.com` с IP Cloudflare (США/Европа). OAuth (`oauth2.googleapis.com`) **не** проксируется — из РФ он обычно работает напрямую.
+Cloudflare Worker принимает запросы с вашего сервера и отправляет их к `*.googleapis.com` через egress Cloudflare. Это снижает зависимость от location сервера, но не является постоянной гарантией.
 
-Levitate использует один env:
+Для текущего production рекомендуется path-style endpoint:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/cloudcode-pa.googleapis.com
 ```
+
+`/daily-cloudcode-pa.googleapis.com` остаётся поддерживаемой альтернативой allowlist, но сейчас не рекомендуется для production из-за наблюдавшейся intermittent geo-классификации.
 
 Бэкенд собирает URL как `{ANTIGRAVITY_CLOUD_CODE_ENDPOINT}/v1internal:...`.
 
@@ -34,13 +36,13 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 /**
  * Antigravity / Cloud Code API reverse proxy (single worker)
  *
- * Client:
- *   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker>/daily-cloudcode-pa.googleapis.com
+ * Client (recommended):
+ *   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker>/cloudcode-pa.googleapis.com
  *
  * Examples:
- *   /daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
- *   /daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse
- *   /cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+ *   /cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
+ *   /cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse
+ *   /daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist (supported alternative)
  *   /businessaicode.googleapis.com/v1/...   (optional enterprise)
  */
 
@@ -88,7 +90,7 @@ function allowedHost(host) {
 
 function parseTarget(url) {
   const parts = url.pathname.split("/").filter(Boolean);
-  let host = "daily-cloudcode-pa.googleapis.com";
+  let host = "cloudcode-pa.googleapis.com";
   let rest = parts;
 
   if (parts[0] && parts[0].includes(".")) {
@@ -216,23 +218,27 @@ https://google-api-proxy.<account>.workers.dev
 
 ## Шаг 4. `.env` на сервере
 
-Формат обязателен: **base URL воркера + `/daily-cloudcode-pa.googleapis.com` в пути** (path-style host embedding).
+Формат: **base URL воркера + `/cloudcode-pa.googleapis.com` в пути** (path-style host embedding).
+
+Рекомендуемый production endpoint:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/cloudcode-pa.googleapis.com
 ```
 
 Пример:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/daily-cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/cloudcode-pa.googleapis.com
 ```
 
 Реальный production-пример (подставьте свой аккаунт/имя):
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.artemkiselev18072k6.workers.dev/daily-cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.artemkiselev18072k6.workers.dev/cloudcode-pa.googleapis.com
 ```
+
+`/daily-cloudcode-pa.googleapis.com` поддерживается allowlist как альтернативный path, но для текущего production не рекомендуется. Если нужно временно проверить его, замените только значение env и повторите аутентифицированные проверки из шага 5.
 
 Перезапуск только бэкенда:
 
@@ -275,7 +281,21 @@ curl -sS -X POST \
 
 Ожидаемо: **HTTP 401 UNAUTHENTICATED** (или JSON с `UNAUTHENTICATED`).
 
-Это хорошо: запрос дошёл до Google, а не упёрся в geo-блок. Geo-ошибка / HTML от блокировки / `host not allowed` — плохо.
+Это подтверждает только маршрутизацию до Google через Worker. `401` без токена **не** доказывает успешную geo-классификацию; для этого нужна аутентифицированная проверка.
+
+### Аутентифицированная проверка
+
+Не записывайте токен в документацию или shell history. Используйте access token, который уже применяет backend, и тот же project ID/payload:
+
+```bash
+curl -sS -i -X POST \
+  "$ANTIGRAVITY_CLOUD_CODE_ENDPOINT/v1internal:loadCodeAssist" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"cloudaicompanionProject\":\"${GOOGLE_USER_PROJECT:-levitate-api}\"}"
+```
+
+После этого выполните аутентифицированный chat-запрос через Levitate с моделью `gemini-3.6-flash-high`. Проверяйте HTTP-статус и тело ответа: `200` без `FAILED_PRECONDITION`/`User location is not supported` — полезнее, чем один health или unauthenticated `401`.
 
 ---
 
@@ -293,9 +313,9 @@ curl -sS -X POST \
 
 ```text
 Levitate backend
-  → POST https://<worker>/daily-cloudcode-pa.googleapis.com/v1internal:...
+  → POST https://<worker>/cloudcode-pa.googleapis.com/v1internal:...
     → Worker парсит host из первого сегмента пути
-    → fetch https://daily-cloudcode-pa.googleapis.com/v1internal:...
+    → fetch https://cloudcode-pa.googleapis.com/v1internal:...
     → стрим/ответ обратно в Levitate
 ```
 
@@ -303,39 +323,46 @@ Levitate backend
 
 ---
 
-## Известная проблема: intermittent `User location is not supported`
+## cloudcode-pa vs daily-cloudcode-pa
 
-Даже при корректном Worker (health = `ok`, unauth path = `401 UNAUTHENTICATED`) Google иногда отвечает:
+Оба hostname относятся к одной внутренней семье Google Cloud Code API. Allowlist Worker принимает оба через regex `(?:daily-)?cloudcode-pa`. Google публично не описывает их точное operational distinction; любые толкования о роли `daily` — **[INFERENCE]**, а не официальная семантика.
 
-```json
-{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}
-```
+Наблюдаемое production-поведение:
 
-Наблюдения с production-сервера Levitate:
+1. Ранее production использовал Worker path `/daily-cloudcode-pa.googleapis.com`. Аутентифицированные запросы `gemini-3.6-flash-high` intermittently возвращали Google HTTP 400 `FAILED_PRECONDITION` с сообщением `User location is not supported for the API use`, даже после ретраев.
+2. Через тот же Worker, credential и Cloudflare ARN colo path `/cloudcode-pa.googleapis.com` работал.
+3. Production переключили на:
 
-1. Прямой вызов `https://daily-cloudcode-pa.googleapis.com/...` с RU-сервера — **всегда** LOCATION 400.
-2. Через Worker — **~50%** LOCATION / **~50%** OK на одном и том же payload/токене.
-3. Worker colo (cf-ray `…-ARN`) один и тот же; Google по-разному классифицирует egress-IP Cloudflare.
-4. `fetchAvailableModels` / квоты обычно проходят; падает именно `streamGenerateContent`.
+   ```env
+   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/cloudcode-pa.googleapis.com
+   ```
 
-### Что делает Levitate backend
+   В свежей проверке 10/10 аутентифицированных Gemini-запросов завершились успешно; `loadCodeAssist` и `fetchAvailableModels` вернули HTTP 200; точная admin simulation также вернула HTTP 200.
 
-- Ретраит geo/LOCATION до 5 раз с коротким backoff на том же credential.
-- Классифицирует ошибку как transient (не reauth / не exhausted).
-- В логах пишет `endpoint=` чтобы было видно, что запрос шёл через Worker, а не напрямую.
+Это наблюдаемые результаты конкретной проверки, а не постоянная гарантия. `/daily-cloudcode-pa.googleapis.com` остаётся поддерживаемой альтернативой, но для текущего production не рекомендуется.
 
-### Что можно улучшить в Cloudflare Dashboard (вручную)
+### Точная диагностика
 
-1. **Workers → ваш worker → Settings → Triggers / Domains**  
-   Привяжите **кастомный домен** на зоне Cloudflare (не только `*.workers.dev`) — иногда меняет egress-путь.
-2. **Smart Placement** (если доступен на плане): Settings → Placement → Smart / regional closer to Google US.  
-   На `workers.dev` free-плане colo выбирается близко к клиенту (сервер → ARN/EU), и часть CF egress-IP Google считает «unsupported».
-3. Если LOCATION остаётся частым (>10–20% после ретраев backend): поднимите **маленький VPS в US/DE** как reverse-proxy на `daily-cloudcode-pa.googleapis.com` и укажите его URL в `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` (path-style тот же). Worker CF — не единственный вариант.
-4. Код Worker из этого гайда (стрип `CF-*` / `X-Forwarded-*`) должен быть задеплоен как есть. Naive passthrough снова утечёт RU.
+1. Сначала выполните **аутентифицированный** запрос на текущем endpoint; используйте `gemini-3.6-flash-high` и проверьте HTTP-статус и тело ответа.
+2. Если появляется `FAILED_PRECONDITION` / `User location is not supported`, замените только `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` на рекомендуемый `/cloudcode-pa.googleapis.com`.
+3. Пересоздайте только backend:
 
-Проверка после изменений:
+   ```bash
+   cd /opt/levitate-api && docker compose up -d --force-recreate --no-deps backend
+   ```
 
-```bash
-# с сервера / из backend-контейнера — серия generate через worker
-# ожидаемо: большинство 200; одиночные LOCATION допустимы (backend ретраит)
-```
+4. Проверьте runtime env внутри контейнера, health Worker и затем повторите аутентифицированный chat-запрос:
+
+   ```bash
+   docker compose exec backend printenv ANTIGRAVITY_CLOUD_CODE_ENDPOINT
+   curl https://<worker-url>/health
+   ```
+
+   Проверка через админскую симуляцию должна включать реальный authenticated chat, а не только открытие health URL.
+5. Не считайте unauthenticated `401` признаком geo-успеха: он подтверждает только маршрутизацию до Google. Для результата нужны authenticated `loadCodeAssist`/`fetchAvailableModels` и chat.
+
+### Rollback и fallback
+
+Rollback делается изменением только значения `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` без публикации токенов или других секретов, затем тем же пересозданием backend и полной проверкой runtime env, health и authenticated chat. Возврат на `/daily-cloudcode-pa.googleapis.com` — лишь временная проверка поддерживаемой альтернативы; результат нужно подтвердить заново.
+
+Если у `/cloudcode-pa.googleapis.com` появятся persistent LOCATION-ошибки, надёжный fallback — стабильный reverse proxy на VPS в US/DE или другой фиксированный egress в разрешённом регионе. Ретраи Worker/backend — только mitigation, а не замена стабильному egress.
