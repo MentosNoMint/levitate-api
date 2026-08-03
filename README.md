@@ -114,6 +114,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser to view the 
 
 ---
 
+## 📚 Docs
+
+*   [Cloudflare Worker proxy (Cloud Code geo bypass)](docs/cloudflare-worker-proxy.md)
+*   [SSH tunnel for Google account OAuth](docs/ssh-tunnel-guide.md)
+
+---
+
 ## 📜 License
 
 Distributed under the MIT License. See `LICENSE` for more information.

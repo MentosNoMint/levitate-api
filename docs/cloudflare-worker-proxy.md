@@ -1,96 +1,302 @@
-# Настройка Cloudflare Worker прокси для обхода блокировок Google
+# Cloudflare Worker: прокси Cloud Code API (обход geo-блокировки)
 
-Поскольку сервер находится в регионе, где Google Cloud Gemini API недоступен, запросы возвращают ошибку `User location is not supported`. 
-Мы решим это, создав бесплатный Cloudflare Worker, который будет выступать в роли прокси (все запросы от Cloudflare идут с разрешенных IP-адресов США/Европы).
+## Зачем
+
+Сервер в регионе, где Google Cloud Code / Gemini API недоступен, получает ошибки вроде:
+
+- `User location is not supported`
+- `not available in your country`
+
+Cloudflare Worker принимает запросы с вашего сервера и проксирует их на `*.googleapis.com` с IP Cloudflare (США/Европа). OAuth (`oauth2.googleapis.com`) **не** проксируется — из РФ он обычно работает напрямую.
+
+Levitate использует один env:
+
+```env
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
+```
+
+Бэкенд собирает URL как `{ANTIGRAVITY_CLOUD_CODE_ENDPOINT}/v1internal:...`.
 
 ---
 
-## Шаг 1. Создание Cloudflare Worker
+## Шаг 1. Создать Worker
 
-1. Зарегистрируйся или войди на [Cloudflare](https://dash.cloudflare.com/).
-2. В левом меню выбери **Workers & Pages** -> **Overview**.
-3. Нажми кнопку **Create** (или **Create application**), затем выбери **Worker** (или **Create Worker**).
-4. Дай воркеру любое имя (например, `google-api-proxy`) и нажми **Deploy**.
-5. После деплоя нажми кнопку **Edit Code** (Редактировать код).
+1. Войдите в [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. **Workers & Pages** → **Overview** → **Create** → **Worker**.
+3. Имя любое (`antigravity`, `google-api-proxy` и т.п.) → **Deploy**.
+4. **Edit Code** — удалите шаблон и вставьте код ниже → **Save and Deploy**.
 
 ---
 
-## Шаг 2. Код Воркера
-
-Удали весь стандартный код и вставь этот универсальный скрипт:
+## Шаг 2. Код Worker (production)
 
 ```javascript
+/**
+ * Antigravity / Cloud Code API reverse proxy (single worker)
+ *
+ * Client:
+ *   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker>/daily-cloudcode-pa.googleapis.com
+ *
+ * Examples:
+ *   /daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
+ *   /daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse
+ *   /cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+ *   /businessaicode.googleapis.com/v1/...   (optional enterprise)
+ */
+
+const ALLOWED_HOST_RE =
+  /^(?:(?:daily-)?cloudcode-pa(?:\.sandbox)?\.googleapis\.com|businessaicode\.googleapis\.com|generativelanguage\.googleapis\.com)$/i;
+
+const DROP_REQ = new Set([
+  "host",
+  "connection",
+  "content-length",
+  "transfer-encoding",
+  "keep-alive",
+  "proxy-connection",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
+  // IP / geo leak — CRITICAL
+  "cf-connecting-ip",
+  "cf-ipcountry",
+  "cf-ray",
+  "cf-visitor",
+  "cf-ew-via",
+  "cf-worker",
+  "cdn-loop",
+  "true-client-ip",
+  "x-real-ip",
+  "x-forwarded-for",
+  "x-forwarded-proto",
+  "x-forwarded-host",
+  "x-forwarded-port",
+  "forwarded",
+]);
+
+const DROP_RES = new Set([
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+]);
+
+function allowedHost(host) {
+  return ALLOWED_HOST_RE.test(host);
+}
+
+function parseTarget(url) {
+  const parts = url.pathname.split("/").filter(Boolean);
+  let host = "daily-cloudcode-pa.googleapis.com";
+  let rest = parts;
+
+  if (parts[0] && parts[0].includes(".")) {
+    host = parts[0];
+    rest = parts.slice(1);
+  }
+
+  if (!allowedHost(host)) {
+    return { error: `host not allowed: ${host}` };
+  }
+
+  const path = "/" + rest.join("/");
+  return {
+    host,
+    target: `https://${host}${path}${url.search}`,
+  };
+}
+
+function filterReqHeaders(src, host) {
+  const h = new Headers();
+  for (const [k, v] of src.entries()) {
+    const lk = k.toLowerCase();
+    if (DROP_REQ.has(lk) || lk.startsWith("cf-")) continue;
+    h.set(k, v);
+  }
+  h.set("Host", host);
+  h.set("Origin", `https://${host}`);
+  if (h.has("Referer")) h.set("Referer", `https://${host}/`);
+  return h;
+}
+
+function filterResHeaders(src) {
+  const h = new Headers();
+  for (const [k, v] of src.entries()) {
+    if (DROP_RES.has(k.toLowerCase())) continue;
+    h.set(k, v);
+  }
+  h.set("Access-Control-Allow-Origin", "*");
+  h.set("Access-Control-Allow-Headers", "*");
+  h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  h.set("Cache-Control", "no-cache");
+  h.set("X-Accel-Buffering", "no");
+  return h;
+}
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "*",
+          "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
     const url = new URL(request.url);
-    
-    // Парсим путь для определения целевого хоста Google
-    const pathParts = url.pathname.split('/');
-    let targetHost = 'daily-cloudcode-pa.googleapis.com';
-    
-    if (pathParts[1] && pathParts[1].endsWith('googleapis.com')) {
-      targetHost = pathParts[1];
-      url.pathname = '/' + pathParts.slice(2).join('/');
-    }
-    
-    url.hostname = targetHost;
-    url.protocol = 'https:';
-    url.port = '';
-
-    // Копируем и модифицируем заголовки
-    const headers = new Headers(request.headers);
-    headers.set('Host', targetHost);
-    
-    if (headers.has('Origin')) {
-      headers.set('Origin', `https://${targetHost}`);
+    if (url.pathname === "/" || url.pathname === "/health") {
+      return new Response(
+        "ok antigravity-cloudcode-proxy\n",
+        { headers: { "content-type": "text/plain; charset=utf-8" } }
+      );
     }
 
-    const newRequest = new Request(url.toString(), {
+    const parsed = parseTarget(url);
+    if (parsed.error) {
+      return Response.json({ error: parsed.error }, { status: 400 });
+    }
+
+    const headers = filterReqHeaders(request.headers, parsed.host);
+    const init = {
       method: request.method,
-      headers: headers,
-      body: request.body,
-      redirect: 'manual'
-    });
+      headers,
+      redirect: "manual",
+      body:
+        request.method === "GET" || request.method === "HEAD"
+          ? undefined
+          : request.body,
+    };
+    // streaming POST body support on CF
+    // @ts-ignore
+    init.duplex = "half";
 
-    return fetch(newRequest);
+    let up;
+    try {
+      up = await fetch(parsed.target, init);
+    } catch (e) {
+      return Response.json(
+        { error: "upstream_fetch_failed", detail: String(e), target: parsed.target },
+        { status: 502 }
+      );
+    }
+
+    return new Response(up.body, {
+      status: up.status,
+      statusText: up.statusText,
+      headers: filterResHeaders(up.headers),
+    });
   },
 };
 ```
 
-Нажми **Save and deploy** (Сохранить и развернуть) в правом верхнем углу.
-
 ---
 
-## Шаг 3. Получение ссылки
+## Шаг 3. URL воркера
 
-После сохранения ты получишь адрес воркера, например:
+После деплоя в Dashboard появится `workers.dev` URL, например:
+
+```text
+https://antigravity.<account>.workers.dev
 ```
-https://google-api-proxy.<твое-имя>.workers.dev
+
+или
+
+```text
+https://google-api-proxy.<account>.workers.dev
+```
+
+Имя в subdomain — то, что вы задали при создании Worker.
+
+---
+
+## Шаг 4. `.env` на сервере
+
+Формат обязателен: **base URL воркера + `/daily-cloudcode-pa.googleapis.com` в пути** (path-style host embedding).
+
+```env
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
+```
+
+Пример:
+
+```env
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/daily-cloudcode-pa.googleapis.com
+```
+
+Реальный production-пример (подставьте свой аккаунт/имя):
+
+```env
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.artemkiselev18072k6.workers.dev/daily-cloudcode-pa.googleapis.com
+```
+
+Перезапуск только бэкенда:
+
+```bash
+cd /opt/levitate-api && docker compose up -d --force-recreate --no-deps backend
+```
+
+Для локальной разработки вне РФ можно оставить прямой URL:
+
+```env
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://daily-cloudcode-pa.googleapis.com
 ```
 
 ---
 
-## Шаг 4. Настройка на сервере
+## Шаг 5. Проверка
 
-1. Подключись к серверу по SSH.
-2. Открой файл конфигурации `.env`:
-   ```bash
-   nano /opt/levitate-api/.env
-   ```
-3. Найди параметр `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` и замени его значение, добавив имя хоста Google в путь:
-   ```env
-   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://google-api-proxy.<твое-имя>.workers.dev/daily-cloudcode-pa.googleapis.com
-   ```
-   *(Замени `https://google-api-proxy.<твое-имя>.workers.dev` на реальную ссылку твоего воркера)*.
+### Health воркера
 
-4. Перезапусти контейнер бэкенда, чтобы применить настройки:
-   ```bash
-   cd /opt/levitate-api
-   docker compose up -d backend
-   ```
+```bash
+curl https://<worker-url>/health
+```
+
+Ожидаемый ответ:
+
+```text
+ok antigravity-cloudcode-proxy
+```
+
+### Доступ к Google через прокси (без токена)
+
+С сервера или из контейнера:
+
+```bash
+curl -sS -X POST \
+  "$ANTIGRAVITY_CLOUD_CODE_ENDPOINT/v1internal:fetchAvailableModels" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+Ожидаемо: **HTTP 401 UNAUTHENTICATED** (или JSON с `UNAUTHENTICATED`).
+
+Это хорошо: запрос дошёл до Google, а не упёрся в geo-блок. Geo-ошибка / HTML от блокировки / `host not allowed` — плохо.
 
 ---
 
-## Как это работает
+## Важные замечания
 
-Бэкенд отправляет запрос на твой Cloudflare Worker. Воркер видит в пути `daily-cloudcode-pa.googleapis.com`, перенаправляет запрос туда от своего лица (из поддерживаемого региона) и возвращает ответ твоему бэкенду.
+1. **Не проксируйте `oauth2.googleapis.com`.** OAuth из РФ обычно работает напрямую; этот Worker только для Cloud Code API.
+2. **Стрип CF/geo-заголовков критичен.** Наивный passthrough утекает `CF-Connecting-IP`, `X-Forwarded-For`, `CF-IPCountry` и т.п. — Google снова видит RU-локацию. Код выше вычищает эти заголовки и подставляет `Host`/`Origin` целевого Google-хоста.
+3. **SSE не буферизуйте.** Worker отдаёт `up.body` как есть + `Cache-Control: no-cache` / `X-Accel-Buffering: no`, чтобы `streamGenerateContent?alt=sse` стримился.
+4. **Levitate нужен только один env** — `ANTIGRAVITY_CLOUD_CODE_ENDPOINT`. Остальные Google endpoints (OAuth) остаются прямыми.
+5. **Allowlist хостов.** Worker принимает только `daily-cloudcode-pa`, `cloudcode-pa` (+ sandbox), `businessaicode`, `generativelanguage` на `googleapis.com`. Произвольные хосты → `400`.
+
+---
+
+## Как это стыкуется с Levitate
+
+```text
+Levitate backend
+  → POST https://<worker>/daily-cloudcode-pa.googleapis.com/v1internal:...
+    → Worker парсит host из первого сегмента пути
+    → fetch https://daily-cloudcode-pa.googleapis.com/v1internal:...
+    → стрим/ответ обратно в Levitate
+```
+
+Связанный гайд по добавлению Google-аккаунтов: [ssh-tunnel-guide.md](./ssh-tunnel-guide.md).
