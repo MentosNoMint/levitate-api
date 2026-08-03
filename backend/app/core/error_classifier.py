@@ -124,6 +124,20 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
     ):
         return UpstreamErrorKind.RATE_LIMIT
 
+    # Geo blocks from Google (FAILED_PRECONDITION) are often intermittent when
+    # egressing via Cloudflare Worker colo IPs. Treat as transient so the
+    # gateway can retry / rotate without marking the account reauth/exhausted.
+    geo_markers = (
+        "user location is not supported",
+        "not available in your country",
+        "user_location",
+        "location is not supported",
+    )
+    if _contains_any(text, geo_markers) or (
+        "failed_precondition" in text and "location" in text
+    ):
+        return UpstreamErrorKind.TRANSIENT
+
     client_markers = (
         "unsupported model",
         "invalid model",

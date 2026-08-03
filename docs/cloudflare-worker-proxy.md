@@ -300,3 +300,42 @@ Levitate backend
 ```
 
 Связанный гайд по добавлению Google-аккаунтов: [ssh-tunnel-guide.md](./ssh-tunnel-guide.md).
+
+---
+
+## Известная проблема: intermittent `User location is not supported`
+
+Даже при корректном Worker (health = `ok`, unauth path = `401 UNAUTHENTICATED`) Google иногда отвечает:
+
+```json
+{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}
+```
+
+Наблюдения с production-сервера Levitate:
+
+1. Прямой вызов `https://daily-cloudcode-pa.googleapis.com/...` с RU-сервера — **всегда** LOCATION 400.
+2. Через Worker — **~50%** LOCATION / **~50%** OK на одном и том же payload/токене.
+3. Worker colo (cf-ray `…-ARN`) один и тот же; Google по-разному классифицирует egress-IP Cloudflare.
+4. `fetchAvailableModels` / квоты обычно проходят; падает именно `streamGenerateContent`.
+
+### Что делает Levitate backend
+
+- Ретраит geo/LOCATION до 5 раз с коротким backoff на том же credential.
+- Классифицирует ошибку как transient (не reauth / не exhausted).
+- В логах пишет `endpoint=` чтобы было видно, что запрос шёл через Worker, а не напрямую.
+
+### Что можно улучшить в Cloudflare Dashboard (вручную)
+
+1. **Workers → ваш worker → Settings → Triggers / Domains**  
+   Привяжите **кастомный домен** на зоне Cloudflare (не только `*.workers.dev`) — иногда меняет egress-путь.
+2. **Smart Placement** (если доступен на плане): Settings → Placement → Smart / regional closer to Google US.  
+   На `workers.dev` free-плане colo выбирается близко к клиенту (сервер → ARN/EU), и часть CF egress-IP Google считает «unsupported».
+3. Если LOCATION остаётся частым (>10–20% после ретраев backend): поднимите **маленький VPS в US/DE** как reverse-proxy на `daily-cloudcode-pa.googleapis.com` и укажите его URL в `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` (path-style тот же). Worker CF — не единственный вариант.
+4. Код Worker из этого гайда (стрип `CF-*` / `X-Forwarded-*`) должен быть задеплоен как есть. Naive passthrough снова утечёт RU.
+
+Проверка после изменений:
+
+```bash
+# с сервера / из backend-контейнера — серия generate через worker
+# ожидаемо: большинство 200; одиночные LOCATION допустимы (backend ретраит)
+```

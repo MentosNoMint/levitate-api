@@ -103,6 +103,10 @@ class TestDynamicAntigravityModels(TestCase):
             "gemini-3.6-flash-high",
             "gemini-3.5-flash-extra-low",
             "claude-sonnet-4-6",
+            "chat_20706",
+            "chat_23310",
+            "tab_flash_lite_preview",
+            "tab_jump_flash_lite_preview",
         }
         built = build_antigravity_models_from_available(available)
         self.assertIn("gemini-3.6-flash-high", built)
@@ -111,6 +115,10 @@ class TestDynamicAntigravityModels(TestCase):
         self.assertIn("claude-sonnet-4-6", built)
         self.assertIn("claude-sonnet-4-6-thinking", built)
         self.assertNotIn("Gemini 3.6 Flash", built)  # display names excluded
+        self.assertNotIn("chat_20706", built)
+        self.assertNotIn("chat_23310", built)
+        self.assertNotIn("tab_flash_lite_preview", built)
+        self.assertNotIn("tab_jump_flash_lite_preview", built)
 
     def test_build_empty_falls_back_default(self):
         self.assertEqual(build_antigravity_models_from_available([]), DEFAULT_ANTIGRAVITY_MODELS)

@@ -215,6 +215,20 @@ class TestErrorClassification(IsolatedAsyncioTestCase):
             classify_upstream_error_kind(Exception("connection reset by peer")),
             UpstreamErrorKind.TRANSIENT,
         )
+        self.assertEqual(
+            classify_upstream_error_kind(
+                Exception(
+                    'HTTP 400: {"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}'
+                )
+            ),
+            UpstreamErrorKind.TRANSIENT,
+        )
+        self.assertEqual(
+            classify_upstream_error_kind(
+                Exception("FAILED_PRECONDITION: not available in your country")
+            ),
+            UpstreamErrorKind.TRANSIENT,
+        )
 
     def test_quota_vs_rate_limit_and_403_resource_exhausted(self):
         quota = FakeHTTPError(403, "RESOURCE_EXHAUSTED: quota exceeded for project")

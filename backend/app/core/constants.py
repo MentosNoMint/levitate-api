@@ -148,13 +148,34 @@ def resolve_antigravity_upstream_model(model_name: str) -> str:
     return model_name
 
 
+def is_public_antigravity_model(model_id: str) -> bool:
+    """Whether an upstream model id should appear in the public picker /v1/models.
+
+    Antigravity's fetchAvailableModels also returns IDE-internal buckets such as
+    ``chat_20706`` / ``tab_flash_lite_preview``. Those are not usable chat models
+    (streamGenerateContent returns INVALID_ARGUMENT) and must stay out of the UI.
+    """
+    if not isinstance(model_id, str):
+        return False
+    name = model_id.strip()
+    if not name:
+        return False
+    lower = name.lower()
+    if lower.startswith(("chat_", "tab_")):
+        return False
+    return True
+
+
 def build_antigravity_models_from_available(available_ids: Iterable[str]) -> List[str]:
     """Build the public Credential.models list from fetchAvailableModels keys.
 
     Includes upstream IDs plus any known aliases that resolve into that set,
     so legacy clients keep working while new models appear automatically.
+    Filters IDE-internal chat_/tab_ buckets out of the public catalog.
     """
-    available: Set[str] = {m for m in available_ids if isinstance(m, str) and m.strip()}
+    available: Set[str] = {
+        m for m in available_ids if isinstance(m, str) and m.strip() and is_public_antigravity_model(m)
+    }
     if not available:
         return list(DEFAULT_ANTIGRAVITY_MODELS)
 
@@ -163,6 +184,8 @@ def build_antigravity_models_from_available(available_ids: Iterable[str]) -> Lis
     seen: Set[str] = set()
 
     def _add(name: str) -> None:
+        if not is_public_antigravity_model(name):
+            return
         key = name.lower()
         if key in seen:
             return

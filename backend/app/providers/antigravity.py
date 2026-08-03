@@ -24,6 +24,22 @@ GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "https://daily-cloudcode-pa.googleapis.com"
 )
 
+# Cloudflare Worker egress IPs are sometimes geo-classified as blocked by Google
+# even when the worker itself is healthy. Retry a few times before bubbling up.
+_GEO_LOCATION_RETRY_LIMIT = 5
+
+
+def _is_geo_blocked_error(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    return (
+        "user location is not supported" in text
+        or "not available in your country" in text
+        or "user_location" in text
+        or ("failed_precondition" in text and "location" in text)
+        or "location is not supported" in text
+    )
+
+
 def _antigravity_headers(token: str) -> dict:
     return {
         "User-Agent": "antigravity/2.35.0 windows/amd64",
@@ -515,9 +531,14 @@ class AntigravityProvider(BaseProvider):
         async def response_generator():
             client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
             url = f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
-            for attempt in range(2):
+            # Auth refresh gets one extra attempt; geo/location flaps get several
+            # because CF Worker egress IP classification is intermittent.
+            max_attempts = 2 + _GEO_LOCATION_RETRY_LIMIT
+            geo_retries = 0
+            auth_retried = False
+            for attempt in range(max_attempts):
                 try:
-                    token = await self.get_access_token(force_refresh=(attempt > 0))
+                    token = await self.get_access_token(force_refresh=(auth_retried and attempt > 0))
                     headers = {
                         "User-Agent": "antigravity/2.35.0 windows/amd64",
                         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
@@ -527,16 +548,29 @@ class AntigravityProvider(BaseProvider):
                     }
                     async with httpx.AsyncClient(timeout=client_timeout) as client:
                         async with client.stream("POST", url, headers=headers, json=body) as response:
-                            if response.status_code in (401, 403) and attempt == 0:
+                            if response.status_code in (401, 403) and not auth_retried:
                                 cache_key = get_credential_access_token_key(self.credential.id)
                                 await redis_client.delete(cache_key)
+                                auth_retried = True
                                 raise httpx.HTTPStatusError("Auth error", request=response.request, response=response)
                             if response.status_code != 200:
                                 body_text = await response.aread()
                                 error_text = body_text.decode(errors="replace")
+                                if _is_geo_blocked_error(error_text) and geo_retries < _GEO_LOCATION_RETRY_LIMIT:
+                                    geo_retries += 1
+                                    logger.warning(
+                                        "Antigravity geo/location block via endpoint=%s (attempt %s/%s): %s",
+                                        GOOGLE_CLOUD_CODE_ENDPOINT,
+                                        geo_retries,
+                                        _GEO_LOCATION_RETRY_LIMIT,
+                                        error_text[:240],
+                                    )
+                                    await asyncio.sleep(min(0.15 * geo_retries, 0.8))
+                                    continue
                                 logger.error(
-                                    "Antigravity request failed with HTTP %s: %s",
+                                    "Antigravity request failed with HTTP %s via endpoint=%s: %s",
                                     response.status_code,
+                                    GOOGLE_CLOUD_CODE_ENDPOINT,
                                     error_text[:500],
                                 )
                                 raise Exception(f"HTTP {response.status_code}: {error_text}")
@@ -711,11 +745,12 @@ class AntigravityProvider(BaseProvider):
                             break
                 except httpx.HTTPStatusError as status_err:
                     # One token-cache refresh retry for auth challenges only.
-                    # Do not mutate credential status here вЂ” chat/usage classify
+                    # Do not mutate credential status here — chat/usage classify
                     # quota vs rate-limit vs auth vs client errors centrally.
-                    if status_err.response.status_code in (401, 403) and attempt == 0:
+                    if status_err.response.status_code in (401, 403) and not auth_retried:
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)
+                        auth_retried = True
                         continue
                     raise status_err
                 except Exception as stream_err:
@@ -727,9 +762,21 @@ class AntigravityProvider(BaseProvider):
                         or err_str.startswith("HTTP 403:")
                         or err_str.startswith("Auth error")
                     )
-                    if is_retryable_auth_http and attempt == 0:
+                    if is_retryable_auth_http and not auth_retried:
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)
+                        auth_retried = True
+                        continue
+                    if _is_geo_blocked_error(err_str) and geo_retries < _GEO_LOCATION_RETRY_LIMIT:
+                        geo_retries += 1
+                        logger.warning(
+                            "Antigravity geo/location exception via endpoint=%s (attempt %s/%s): %s",
+                            GOOGLE_CLOUD_CODE_ENDPOINT,
+                            geo_retries,
+                            _GEO_LOCATION_RETRY_LIMIT,
+                            err_str[:240],
+                        )
+                        await asyncio.sleep(min(0.15 * geo_retries, 0.8))
                         continue
                     raise stream_err
 
