@@ -1,0 +1,11 @@
+name = "antigravity-cloudcode-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-22"
+
+# Permanent western egress: place the Worker closest to Google's Cloud Code
+# endpoint instead of the caller's colo (ARN/RU from the Beget VPS).
+# Without this, worker/daily generate flaps 200/400 "User location is not
+# supported" when called from ARN; with hostname placement the Worker runs
+# near daily-cloudcode-pa.googleapis.com and the geo flap disappears.
+[placement]
+hostname = "daily-cloudcode-pa.googleapis.com"

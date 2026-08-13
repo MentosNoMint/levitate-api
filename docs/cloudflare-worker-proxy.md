@@ -21,6 +21,33 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 
 ---
 
+## Шаг 0. Постоянный западный egress (placement hostname)
+
+Без этого Worker, вызванный с Beget VPS, исполняется в colo **ARN** и `streamGenerateContent` на `daily-cloudcode-pa` флапает `200/400 User location is not supported`. Нативная проверка с VPS без локального прокси: `[200, 400, 400, 200, 400]`; geo-ретраи Levitate добирают до 200, но каждый 400 — лишняя задержка.
+
+Постоянное решение — размещение Worker рядом с Google, а не с вызывающим. Исходники и конфиг лежат в `worker/`:
+
+```toml
+# worker/wrangler.toml
+name = "antigravity-cloudcode-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-22"
+
+[placement]
+hostname = "daily-cloudcode-pa.googleapis.com"
+```
+
+Деплой:
+
+```bash
+cd worker
+npx wrangler login   # один раз, откроет браузер Cloudflare
+npx wrangler deploy
+```
+
+После деплоя `https://antigravity.<account>.workers.dev/cdn-cgi/trace` с VPS должен показывать не ARN, а коло возле Google; тогда 400 location с daily исчезает без каких-либо процессов на локальной машине. Levitate менять не нужно — URL тот же.
+
+## Шаг 1. Создать Worker
 ## Шаг 1. Создать Worker
 
 1. Войдите в [Cloudflare Dashboard](https://dash.cloudflare.com/).
