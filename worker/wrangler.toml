@@ -1,34 +1,20 @@
-name = "antigravity-canary"
+name = "antigravity"
 main = "worker.js"
 compatibility_date = "2026-01-22"
 
-# CANARY NAME ON PURPOSE. The production worker
-# antigravity.<account>.workers.dev was deployed manually and its live
-# source/config was never fetched. Deploying wrangler over it blindly can
-# overwrite unknown live behavior. Deploy this canary, verify it end to
-# end, and only then promote (rename or repoint Levitate).
-
-# CANDIDATE — NOT VERIFIED IN PRODUCTION.
-# Worker called from ARN/RU runs in the ARN colo and Google daily-cloudcode-pa
-# answers intermittent 400 "User location is not supported". Levitate's
-# geo-retry on the same daily host currently absorbs that flap (live turn
-# verified 200 via Arem without any local machine process).
+# PROMOTED after canary verification on 2026-08-13.
+# Canary antigravity-canary (version 748ac647) verified from the Beget VPS:
+#   - /trace: cf-placement response header "remote-IAD" (executed in Ashburn,
+#     not the ARN eyeball colo)
+#   - 10/10 streamGenerateContent via canary on daily: all 200, zero 400
+#   - full game turn via canary: source=live provider=arem (161 words)
+# Deploying the same verified script under the production name keeps the
+# workers.dev URL unchanged and Levitate's endpoint intact.
 #
 # Explicit region placement moves the Worker next to a Google Cloud region
-# (US), so Google sees non-RU egress. Do NOT use placement.hostname here:
-# host probing is experimental and unreliable against replicated/anycast
-# endpoints like googleapis.com.
-#
-# After `npx wrangler deploy`, verify on the CANARY URL:
-#   1. curl -sS https://antigravity-canary.<account>.workers.dev/trace
-#      — /trace echoes request.headers["cf-placement"] (Cloudflare adds it
-#      to the REQUEST, not the client response). Value must start with
-#      "remote-" (execution moved) and not be "local-ARN".
-#      /cdn-cgi/* is rejected 404, not a placement check.
-#   2. Repeated streamGenerateContent (10x) via the canary on daily — no 400.
-#   3. One full game turn against the canary endpoint — source=live provider=arem.
-# Only then promote: either `name = "antigravity"` deploy of this verified
-# script, or point Levitate at the canary URL. If 400s persist, remove
-# this block and fall back to geo-retries / a dedicated western proxy.
+# (US), so Google sees non-RU egress and the daily 200/400 location flap
+# disappears. Do NOT use placement.hostname here: host probing is
+# experimental and unreliable against replicated/anycast endpoints like
+# googleapis.com.
 [placement]
 region = "gcp:us-east4"

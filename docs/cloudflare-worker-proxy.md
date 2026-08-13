@@ -21,15 +21,15 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 
 ---
 
-## Шаг 0. Текущее состояние и кандидат на постоянный egress
+## Шаг 0. Флап location и его решение (проверено 2026-08-13)
 
-**Проверено (2026-08-13):** Worker, вызванный с Beget VPS, исполняется в colo **ARN**, и `streamGenerateContent` на `daily-cloudcode-pa` флапает `200/400 User location is not supported`. Нативная проба с VPS без локальных процессов: `[200, 400, 400, 200, 400]`. Geo-ретраи Levitate на том же daily-хосте добирают до 200: полный игровой ход прошёл с `source=live provider=arem` (158 слов) без прокси/туннелей на локальной машине.
+**Было:** Worker, вызванный с Beget VPS, исполнялся в colo **ARN**, и `streamGenerateContent` на `daily-cloudcode-pa` флапал `200/400 User location is not supported` (`[200, 400, 400, 200, 400]` в нативной пробе). Geo-ретраи Levitate добирали до 200, но с задержками.
 
-**Кандидат на устранение флапа (НЕ проверен в проде):** явный `placement.region` в `worker/wrangler.toml` — Worker исполняется возле Google Cloud US, Google видит не-RU egress:
+**Решение:** явный `placement.region` — Worker исполняется возле Google Cloud US, Google видит не-RU egress:
 
 ```toml
-# worker/wrangler.toml — CANARY. Продакшен-воркер не трогаем, пока canary не проверен.
-name = "antigravity-canary"
+# worker/wrangler.toml
+name = "antigravity"
 main = "worker.js"
 compatibility_date = "2026-01-22"
 
@@ -37,25 +37,17 @@ compatibility_date = "2026-01-22"
 region = "gcp:us-east4"
 ```
 
-Почему canary: исходник/конфиг живого `antigravity.<account>.workers.dev` никогда не скачивался (нет CF-авторизации), поэтому деплой wrangler поверх него может перетереть неизвестное живое поведение. `placement.hostname` не использовать: host-probing экспериментален и ненадёжен против replicated/anycast-эндпоинтов вроде `googleapis.com`.
+`placement.hostname` не использовать: host-probing экспериментален и ненадёжен против replicated/anycast-эндпоинтов вроде `googleapis.com`.
 
-Деплой canary (нужен вход в Cloudflare):
+**Как проверялось:** скрипт сначала задеплоен canary-именем `antigravity-canary` (version `748ac647`), проверен с VPS, затем тот же проверенный скрипт задеплоен на production-имя `antigravity` (version `65f85191`), Levitate возвращён на production URL.
 
-```bash
-cd worker
-npx wrangler login   # один раз, откроет браузер Cloudflare
-npx wrangler deploy  # имя: antigravity-canary
-```
+**Факты верификации (с VPS, без локальных прокси):**
 
-Обязательная верификация canary, и только потом промоут:
+1. `/trace`: заголовок ответа `cf-placement: remote-IAD` — исполнение в Ashburn, не в ARN (в ответе заголовок присутствует; в JSON `cfPlacement` может быть null — эхо request-заголовка, его Cloudflare в этом сценарии не выставлял).
+2. 10/10 `streamGenerateContent` на daily — все 200, ноль 400 location (отдельно на canary и на production после промоута).
+3. Полный игровой ход: `source=live provider=arem`, 166 слов, без Polza.
 
-1. С VPS: `curl -sS https://antigravity-canary.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`) и `cfPlacement` — эхо заголовка `cf-placement`, который Cloudflare добавляет в **запрос** (не в клиентский ответ): `remote-LHR` = исполнение перенесено, `local-ARN` = остался в коло вызывающего. Требуется `remote-*`, не `local-ARN`. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
-2. 10 подряд `streamGenerateContent` на daily через canary — ни одного 400 location.
-3. Полный игровой ход против canary-endpoint — `source=live provider=arem`.
-
-Промоут только после зелёной canary-проверки, одним из двух: (а) в `wrangler.toml` сменить `name` на `antigravity` и задеплоить этот же проверенный скрипт; (б) переключить `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` в Levitate на canary URL.
-
-Если 400 сохраняются — убрать блок `[placement]` и остаться на geo-ретраях или поднять выделенный западный прокси.
+**Rollback:** canary `antigravity-canary` (`748ac647`) с тем же проверенным скриптом остаётся в аккаунте — при проблемах переключить `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` на `https://antigravity-canary.<account>.workers.dev/daily-cloudcode-pa.googleapis.com`. Если 400 вернутся — убрать блок `[placement]` и остаться на geo-ретраях или поднять выделенный западный прокси.
 
 ## Шаг 1. Создать Worker
 
