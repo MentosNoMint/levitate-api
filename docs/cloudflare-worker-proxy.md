@@ -327,19 +327,17 @@ Levitate backend
 
 Оба hostname относятся к одной внутренней семье Google Cloud Code API. Allowlist Worker принимает оба через regex `(?:daily-)?cloudcode-pa`. Google публично не описывает их точное operational distinction; любые толкования о роли `daily` — **[INFERENCE]**, а не официальная семантика.
 
-Наблюдаемое production-поведение:
+Дискриминирующий тест (один access token, один сериализованный `streamGenerateContent`, без печати секретов), 2026-08-13:
 
-1. Ранее production использовал Worker path `/daily-cloudcode-pa.googleapis.com`. Аутентифицированные запросы `gemini-3.6-flash-high` intermittently возвращали Google HTTP 400 `FAILED_PRECONDITION` с сообщением `User location is not supported for the API use`, даже после ретраев.
-2. Через тот же Worker, credential и Cloudflare ARN colo path `/cloudcode-pa.googleapis.com` работал.
-3. Production переключили на:
+| Host | Egress FRA / loc=PL | Egress ARN / loc=RU (Beget VPS) |
+|---|---|---|
+| `cloudcode-pa.googleapis.com` | **429 RESOURCE_EXHAUSTED** | **429 RESOURCE_EXHAUSTED** |
+| `daily-cloudcode-pa.googleapis.com` | **200 generate** (`gemini-3.6-flash-high`) | **400 FAILED_PRECONDITION** `User location is not supported` |
+| quota APIs (`loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuotaSummary`) | 200, remainingFraction 1.0, `standard-tier` | 200, same |
 
-   ```env
-   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/cloudcode-pa.googleapis.com
-   ```
+Вывод: generate на `cloudcode-pa` сейчас мёртв независимо от IP. Generate на `daily-cloudcode-pa` жив, но Google режет RU/ARN. Worker, вызванный с VPS, садится в colo **ARN**; с этой машины — **FRA**. Чтобы daily работал с Levitate на Beget, Worker должен egress-ить из поддерживаемого colo (Smart Placement / западный прокси), иначе путь VPS→ARN→daily снова даст 400.
 
-   В свежей проверке 10/10 аутентифицированных Gemini-запросов завершились успешно; `loadCodeAssist` и `fetchAvailableModels` вернули HTTP 200; точная admin simulation также вернула HTTP 200.
-
-Это наблюдаемые результаты конкретной проверки, а не постоянная гарантия. `/daily-cloudcode-pa.googleapis.com` остаётся поддерживаемой альтернативой, но для текущего production не рекомендуется.
+Backend после 429/geo на одном host пробует sibling (`cloudcode-pa` ↔ `daily-cloudcode-pa`).
 
 ### Точная диагностика
 
