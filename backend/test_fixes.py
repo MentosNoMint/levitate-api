@@ -73,6 +73,42 @@ class TestErrorClassifier(TestCase):
         self.assertTrue(is_rl)
         self.assertFalse(is_q)
 
+    def test_generic_resource_exhausted_429_is_rate_limit(self):
+        err = Exception(
+            '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Resource has been exhausted (e.g. check quota)."}}'
+        )
+        err.status_code = 429
+        is_rl, is_q = classify_upstream_error(err)
+        self.assertTrue(is_rl)
+        self.assertFalse(is_q)
+
+    def test_bare_http_429_resource_exhausted_is_rate_limit(self):
+        is_rl, is_q = classify_upstream_error(Exception("HTTP 429 RESOURCE_EXHAUSTED"))
+        self.assertTrue(is_rl)
+        self.assertFalse(is_q)
+
+    def test_quota_exceeded_and_daily_limit_are_quota(self):
+        is_rl, is_q = classify_upstream_error(Exception("HTTP 429 RESOURCE_EXHAUSTED: quota exceeded"))
+        self.assertFalse(is_rl)
+        self.assertTrue(is_q)
+        is_rl, is_q = classify_upstream_error(Exception("quota_exceeded"))
+        self.assertFalse(is_rl)
+        self.assertTrue(is_q)
+        is_rl, is_q = classify_upstream_error(Exception("daily limit reached"))
+        self.assertFalse(is_rl)
+        self.assertTrue(is_q)
+
+
+class TestCloudCodeEndpoint(TestCase):
+    def test_source_default_is_production_not_staging(self):
+        from pathlib import Path
+
+        src = Path(__file__).with_name("app").joinpath("providers", "antigravity.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"https://cloudcode-pa.googleapis.com"', src)
+        self.assertNotIn('"https://daily-cloudcode-pa.googleapis.com"', src)
+
 
 class TestModelGroups(TestCase):
     def test_gemini_group(self):

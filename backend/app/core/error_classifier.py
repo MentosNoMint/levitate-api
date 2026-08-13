@@ -56,9 +56,10 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
     if _contains_any(text, hard_auth_markers):
         return UpstreamErrorKind.AUTH
 
+    # Explicit personal/project quota only. Standalone resource_exhausted /
+    # capacity exhausted is Google capacity/rate (HTTP 429 RESOURCE_EXHAUSTED
+    # with remainingFraction ~1.0) and must fall through to RATE_LIMIT.
     hard_quota_markers = (
-        "resource_exhausted",
-        "resource exhausted",
         "quota_exhausted",
         "quota exhausted",
         "quota_exceeded",
@@ -70,10 +71,6 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
         "per_day",
         "daily limit",
         "daily",
-        "capacity exhausted",
-        "capacity_exceeded",
-        "capacity exceeded",
-        "no capacity",
     )
     rate_markers = (
         "rate limit",
@@ -87,9 +84,6 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
     )
     quota_context = (
         "quota",
-        "capacity",
-        "resource_exhausted",
-        "resource exhausted",
         "billing",
     )
 
@@ -102,20 +96,18 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
     if not negated_quota and (
         _contains_any(text, hard_quota_markers)
         or (
+            # OpenAI-style "You exceeded your current quota". Do not pair
+            # generic "quota" (e.g. "check quota") with "exhausted" — that is
+            # the Cloud Code RESOURCE_EXHAUSTED capacity body.
             _contains_any(text, quota_context)
             and not _contains_any(text, rate_markers)
-            and (_contains_word(text, "exceeded") or _contains_word(text, "exhausted"))
+            and _contains_word(text, "exceeded")
         )
-        # Bare "quota" without a rate-limit context (e.g. OpenAI "You exceeded
-        # your current quota") is a hard quota error, not a transient rate
-        # limit. Callers guarantee a future reset_at for window-less
-        # credentials, so parking as exhausted is recoverable (#14, N2)
-        or ("quota" in text and not _contains_any(text, rate_markers))
     ):
         return UpstreamErrorKind.QUOTA
 
-    # Generic 429/rate-limit responses are temporary. A 429 containing a hard
-    # quota marker was handled above and must not be put on a short cooldown.
+    # Generic 429/rate-limit responses are temporary, including bare Google
+    # RESOURCE_EXHAUSTED without quota-exceeded/billing/daily markers.
     if (
         status_code == 429
         or _contains_any(text, rate_markers)

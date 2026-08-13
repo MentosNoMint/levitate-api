@@ -236,6 +236,37 @@ class TestErrorClassification(IsolatedAsyncioTestCase):
         self.assertEqual(classify_upstream_error_kind(quota), UpstreamErrorKind.QUOTA)
         self.assertEqual(classify_upstream_error_kind(rate), UpstreamErrorKind.RATE_LIMIT)
 
+    def test_generic_429_resource_exhausted_is_rate_limit(self):
+        cloud_code = FakeHTTPError(
+            429,
+            '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Resource has been exhausted (e.g. check quota)."}}',
+        )
+        bare = Exception("HTTP 429 RESOURCE_EXHAUSTED")
+        self.assertEqual(classify_upstream_error_kind(cloud_code), UpstreamErrorKind.RATE_LIMIT)
+        self.assertEqual(classify_upstream_error_kind(bare), UpstreamErrorKind.RATE_LIMIT)
+
+    def test_explicit_quota_markers_remain_quota(self):
+        self.assertEqual(
+            classify_upstream_error_kind(Exception("HTTP 429 RESOURCE_EXHAUSTED: quota exceeded")),
+            UpstreamErrorKind.QUOTA,
+        )
+        self.assertEqual(
+            classify_upstream_error_kind(Exception("You exceeded your current quota")),
+            UpstreamErrorKind.QUOTA,
+        )
+        self.assertEqual(
+            classify_upstream_error_kind(Exception("quota_exceeded")),
+            UpstreamErrorKind.QUOTA,
+        )
+        self.assertEqual(
+            classify_upstream_error_kind(Exception("daily limit reached")),
+            UpstreamErrorKind.QUOTA,
+        )
+        self.assertEqual(
+            classify_upstream_error_kind(Exception("billing hard limit reached")),
+            UpstreamErrorKind.QUOTA,
+        )
+
     def test_invalid_grant_is_auth(self):
         self.assertEqual(
             classify_upstream_error_kind(Exception("invalid_grant: token revoked")),

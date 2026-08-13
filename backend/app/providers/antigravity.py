@@ -20,8 +20,8 @@ from app.db.models import Credential
 from app.core.constants import get_credential_access_token_key, get_credential_cooldown_key
 
 GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
-    "ANTIGRAVITY_CLOUD_CODE_ENDPOINT", 
-    "https://daily-cloudcode-pa.googleapis.com"
+    "ANTIGRAVITY_CLOUD_CODE_ENDPOINT",
+    "https://cloudcode-pa.googleapis.com",
 )
 
 # Cloudflare Worker egress IPs are sometimes geo-classified as blocked by Google
@@ -539,13 +539,7 @@ class AntigravityProvider(BaseProvider):
             for attempt in range(max_attempts):
                 try:
                     token = await self.get_access_token(force_refresh=(auth_retried and attempt > 0))
-                    headers = {
-                        "User-Agent": "antigravity/2.35.0 windows/amd64",
-                        "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-                        "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    }
+                    headers = _antigravity_headers(token)
                     async with httpx.AsyncClient(timeout=client_timeout) as client:
                         async with client.stream("POST", url, headers=headers, json=body) as response:
                             if response.status_code in (401, 403) and not auth_retried:
