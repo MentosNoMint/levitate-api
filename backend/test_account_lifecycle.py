@@ -168,6 +168,82 @@ class TestProviderLifecycle(IsolatedAsyncioTestCase):
         )
         self.assertNotIn("cachedContents", request)
 
+    async def test_response_format_json_schema_reaches_generation_config(self):
+        captured = []
+        provider = AntigravityProvider(self.credential)
+        provider.get_access_token = AsyncMock(return_value="token")
+        client = ChatClient(captured)
+        with patch(
+            "app.providers.antigravity.decrypt_secret",
+            return_value=json.dumps({"refresh_token": "refresh", "project_id": "project"}),
+        ), patch("app.providers.antigravity.httpx.AsyncClient", return_value=client):
+            await provider.chat_completion(
+                model="gemini-3.5-flash-low",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="schema-session",
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "x",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "beats": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "items": {
+                                        "oneOf": [
+                                            {
+                                                "type": "object",
+                                                "properties": {"text": {"type": "string"}},
+                                                "required": ["text"],
+                                            },
+                                            {
+                                                "type": "object",
+                                                "properties": {"name": {"type": "string"}},
+                                                "required": ["name"],
+                                            },
+                                        ]
+                                    },
+                                },
+                                "audioSfx": {"type": ["string", "null"]},
+                            },
+                            "required": ["beats"],
+                        },
+                    },
+                },
+            )
+        gc = captured[0]["request"]["generationConfig"]
+        self.assertEqual(gc["responseMimeType"], "application/json")
+        rs = gc["responseSchema"]
+        self.assertEqual(rs["type"], "OBJECT")
+        self.assertEqual(rs["properties"]["beats"]["type"], "ARRAY")
+        self.assertEqual(rs["properties"]["beats"]["minItems"], 1)
+        # oneOf is unsupported upstream and relaxed to a bare object
+        self.assertEqual(rs["properties"]["beats"]["items"]["type"], "OBJECT")
+        self.assertEqual(rs["properties"]["audioSfx"]["type"], "STRING")
+        self.assertTrue(rs["properties"]["audioSfx"].get("nullable"))
+
+    async def test_response_format_json_object_sets_mime_type_only(self):
+        captured = []
+        provider = AntigravityProvider(self.credential)
+        provider.get_access_token = AsyncMock(return_value="token")
+        client = ChatClient(captured)
+        with patch(
+            "app.providers.antigravity.decrypt_secret",
+            return_value=json.dumps({"refresh_token": "refresh", "project_id": "project"}),
+        ), patch("app.providers.antigravity.httpx.AsyncClient", return_value=client):
+            await provider.chat_completion(
+                model="gemini-3.5-flash-low",
+                messages=[{"role": "user", "content": "hi"}],
+                response_format={"type": "json_object"},
+            )
+        gc = captured[0]["request"]["generationConfig"]
+        self.assertEqual(gc["responseMimeType"], "application/json")
+        self.assertNotIn("responseSchema", gc)
+
     async def test_oauth_refresh_is_single_flight(self):
         response = OAuthResponse()
         client = OAuthClient(response, delay=0.05)

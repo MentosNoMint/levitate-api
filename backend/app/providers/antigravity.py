@@ -115,6 +115,59 @@ def convert_schema_to_gemini(schema: Any, is_properties_dict: bool = False) -> A
         return [convert_schema_to_gemini(x, is_properties_dict) for x in schema]
     return schema
 
+_RESPONSE_SCHEMA_ALLOWED_KEYS = {
+    "type", "format", "description", "nullable", "enum", "items",
+    "properties", "required", "minItems", "maxItems", "minLength",
+    "maxLength", "maximum", "minimum", "additionalProperties", "pattern",
+}
+
+
+def _convert_response_schema(schema: Any) -> Any:
+    """Convert an OpenAI json_schema schema to Gemini responseSchema subset.
+
+    Google structured output does not accept oneOf/anyOf/const/type-arrays.
+    Keep the constraints Google supports and relax unsupported unions to a
+    bare object so the request stays valid instead of being dropped silently.
+    """
+    if isinstance(schema, list):
+        return [_convert_response_schema(x) for x in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict = {}
+    for key, value in schema.items():
+        if key == "oneOf" or key == "anyOf":
+            out.setdefault("type", "OBJECT")
+            continue
+        if key == "const":
+            continue
+        if key == "strict":
+            continue
+        if key not in _RESPONSE_SCHEMA_ALLOWED_KEYS:
+            continue
+        if key == "type" and isinstance(value, list):
+            non_null = [t for t in value if t != "null"]
+            if "null" in value:
+                out["nullable"] = True
+            if len(non_null) == 1:
+                out["type"] = str(non_null[0]).upper()
+            continue
+        if key == "type" and isinstance(value, str):
+            out["type"] = value.upper()
+            continue
+        if key == "properties":
+            out["properties"] = {
+                str(k): _convert_response_schema(v) for k, v in value.items()
+            }
+            continue
+        if key == "items":
+            out["items"] = _convert_response_schema(value)
+            continue
+        if key in ("required", "enum"):
+            out[key] = value
+            continue
+        out[key] = value
+    return out
+
 class AntigravityProvider(BaseProvider):
     def _format_content(self, content: Any) -> str:
         if isinstance(content, str):
@@ -502,6 +555,21 @@ class AntigravityProvider(BaseProvider):
                 gen_config["stopSequences"] = [stop]
             elif isinstance(stop, list):
                 gen_config["stopSequences"] = [str(s) for s in stop]
+
+        # OpenAI-style structured output must reach Google as
+        # generationConfig.responseMimeType/responseSchema; otherwise the
+        # model is free to return plain prose and the client's schema
+        # enforcement silently does not exist upstream.
+        response_format = kwargs.get("response_format")
+        if isinstance(response_format, dict):
+            fmt = response_format.get("type")
+            if fmt == "json_object":
+                gen_config["responseMimeType"] = "application/json"
+            elif fmt == "json_schema":
+                js = response_format.get("json_schema")
+                if isinstance(js, dict) and isinstance(js.get("schema"), dict):
+                    gen_config["responseMimeType"] = "application/json"
+                    gen_config["responseSchema"] = _convert_response_schema(js["schema"])
 
         if gen_config:
             request_body["generationConfig"] = gen_config
