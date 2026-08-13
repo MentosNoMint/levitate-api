@@ -36,6 +36,37 @@ from app.core.error_classifier import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Keep Retry-After aligned with the Redis cooldown applied for RATE_LIMIT.
+RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+
+def _http_exception_from_upstream_failure(
+    error: Exception,
+    kind: UpstreamErrorKind | None,
+    *,
+    fallback_status: int,
+    fallback_detail: str | None = None,
+) -> HTTPException:
+    """Map a classified upstream failure to the client HTTP status.
+
+    Bare Cloud Code 429 RESOURCE_EXHAUSTED is raised as a generic Exception
+    without ``status_code``. Re-raising that as 500/502 loses RATE_LIMIT.
+    """
+    resolved = kind if kind is not None else classify_upstream_error_kind(error)
+    if resolved == UpstreamErrorKind.RATE_LIMIT:
+        return HTTPException(
+            status_code=429,
+            detail=str(error),
+            headers={"Retry-After": str(RATE_LIMIT_RETRY_AFTER_SECONDS)},
+        )
+    if isinstance(error, HTTPException):
+        return error
+    return HTTPException(
+        status_code=fallback_status,
+        detail=fallback_detail if fallback_detail is not None else str(error),
+    )
+
+
 async def _mark_antigravity_group_exhausted(db_cred: Credential, model_name: str) -> None:
     """Mark a specific quota group as exhausted without killing the whole credential."""
     from app.core.constants import get_model_quota_group
@@ -169,7 +200,11 @@ async def _handle_credential_failure(
         elif kind == UpstreamErrorKind.RATE_LIMIT:
             # Cooldown via ephemeral Redis key; reset_at keeps quota window (#6, N1)
             db_credential.status = "cooldown"
-            await redis_client.set(get_credential_cooldown_key(db_credential.id), "1", ex=60)
+            await redis_client.set(
+                get_credential_cooldown_key(db_credential.id),
+                "1",
+                ex=RATE_LIMIT_RETRY_AFTER_SECONDS,
+            )
         await db.commit()
     finally:
         await CredentialSelector._release_credential_state_lock(credential.id, state_token)
@@ -235,6 +270,7 @@ async def chat_completions(
     
     start_time = time.time()
     last_exception = None
+    last_kind = None
     
     MAX_RETRIES = 10
     attempt = 0
@@ -245,9 +281,11 @@ async def chat_completions(
         )
         if not cred:
             if last_exception:
-                if hasattr(last_exception, "status_code"):
-                    raise last_exception
-                raise HTTPException(status_code=500, detail=str(last_exception))
+                raise _http_exception_from_upstream_failure(
+                    last_exception,
+                    last_kind,
+                    fallback_status=500,
+                )
             raise HTTPException(status_code=503, detail="No eligible credentials available")
             
         if cred.base_url:
@@ -359,6 +397,7 @@ async def chat_completions(
                         db, vkey.id, cred.id, matched_model, None, latency_ms, "failure"
                     )
                     last_exception = e
+                    last_kind = UpstreamErrorKind.CLIENT
                     # Local decrypt/init failures are not quota/auth exhaustion.
                     await _handle_credential_failure(
                         db, vkey, cred, session_id, matched_model, UpstreamErrorKind.CLIENT
@@ -372,16 +411,21 @@ async def chat_completions(
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
             
             last_exception = e
-            
             kind = classify_upstream_error_kind(e)
+            last_kind = kind
             await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             exclude_ids.append(str(cred.id))
             continue
             
     if last_exception:
-        if hasattr(last_exception, "status_code"):
-            raise last_exception
-        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+        raise _http_exception_from_upstream_failure(
+            last_exception,
+            last_kind,
+            fallback_status=502,
+            fallback_detail=(
+                f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}"
+            ),
+        )
     raise HTTPException(status_code=503, detail="No eligible credentials available")
 
 @router.post("/embeddings")
@@ -405,6 +449,7 @@ async def embeddings(
     input_data = payload.get("input", "")
     start_time = time.time()
     last_exception = None
+    last_kind = None
     
     MAX_RETRIES = 10
     attempt = 0
@@ -415,9 +460,11 @@ async def embeddings(
         )
         if not cred:
             if last_exception:
-                if hasattr(last_exception, "status_code"):
-                    raise last_exception
-                raise HTTPException(status_code=500, detail=str(last_exception))
+                raise _http_exception_from_upstream_failure(
+                    last_exception,
+                    last_kind,
+                    fallback_status=500,
+                )
             raise HTTPException(status_code=503, detail="No eligible credentials available")
             
         if cred.base_url:
@@ -476,6 +523,7 @@ async def embeddings(
                         db, vkey.id, cred.id, matched_model, None, latency_ms, "failure"
                     )
                     last_exception = e
+                    last_kind = UpstreamErrorKind.CLIENT
                     await _handle_credential_failure(
                         db, vkey, cred, session_id, matched_model, UpstreamErrorKind.CLIENT
                     )
@@ -488,16 +536,21 @@ async def embeddings(
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
             
             last_exception = e
-            
             kind = classify_upstream_error_kind(e)
+            last_kind = kind
             await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             exclude_ids.append(str(cred.id))
             continue
             
     if last_exception:
-        if hasattr(last_exception, "status_code"):
-            raise last_exception
-        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+        raise _http_exception_from_upstream_failure(
+            last_exception,
+            last_kind,
+            fallback_status=502,
+            fallback_detail=(
+                f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}"
+            ),
+        )
     raise HTTPException(status_code=503, detail="No eligible credentials available")
 
 
@@ -587,6 +640,7 @@ async def images_generations(
     start_time = time.time()
     session_id = None
     last_exception = None
+    last_kind = None
     
     MAX_RETRIES = 10
     attempt = 0
@@ -597,9 +651,11 @@ async def images_generations(
         )
         if not cred:
             if last_exception:
-                if hasattr(last_exception, "status_code"):
-                    raise last_exception
-                raise HTTPException(status_code=500, detail=str(last_exception))
+                raise _http_exception_from_upstream_failure(
+                    last_exception,
+                    last_kind,
+                    fallback_status=500,
+                )
             raise HTTPException(status_code=503, detail="No eligible credentials available")
             
         try:
@@ -660,14 +716,19 @@ async def images_generations(
             await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
             
             last_exception = e
-            exclude_ids.append(str(cred.id))
-            
             kind = classify_upstream_error_kind(e)
+            last_kind = kind
+            exclude_ids.append(str(cred.id))
             await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             continue
             
     if last_exception:
-        if hasattr(last_exception, "status_code"):
-            raise last_exception
-        raise HTTPException(status_code=502, detail=f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}")
+        raise _http_exception_from_upstream_failure(
+            last_exception,
+            last_kind,
+            fallback_status=502,
+            fallback_detail=(
+                f"All credentials failed after {MAX_RETRIES} attempts: {str(last_exception)}"
+            ),
+        )
     raise HTTPException(status_code=503, detail="No eligible credentials available")
