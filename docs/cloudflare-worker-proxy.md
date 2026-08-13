@@ -25,7 +25,7 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 
 **Было:** Worker, вызванный с Beget VPS, исполнялся в colo **ARN**, и `streamGenerateContent` на `daily-cloudcode-pa` флапал `200/400 User location is not supported` (`[200, 400, 400, 200, 400]` в нативной пробе). Geo-ретраи Levitate добирали до 200, но с задержками.
 
-**Решение:** явный `placement.region` — Worker исполняется возле Google Cloud US, Google видит не-RU egress:
+**Решение (проверено в этой сессии, не гарантия навсегда):** явный `placement.region` — Cloudflare запускает Worker в своём дата-центре, ближайшем к указанному региону `gcp:us-east4`, а не возле вызывающего. Куда именно Google классифицирует egress — мы не измеряли; доказано только то, что на проверке 400 location перестали воспроизводиться:
 
 ```toml
 # worker/wrangler.toml
@@ -43,9 +43,11 @@ region = "gcp:us-east4"
 
 **Факты верификации (с VPS, без локальных прокси):**
 
-1. `/trace`: заголовок ответа `cf-placement: remote-IAD` — исполнение в Ashburn, не в ARN (в ответе заголовок присутствует; в JSON `cfPlacement` может быть null — эхо request-заголовка, его Cloudflare в этом сценарии не выставлял).
-2. 10/10 `streamGenerateContent` на daily — все 200, ноль 400 location (отдельно на canary и на production после промоута).
+1. `/trace`: заголовок ответа `cf-placement: remote-IAD` — Worker исполнился в дата-центре Cloudflare Ashburn, не в ARN (в ответе заголовок присутствует; в JSON `cfPlacement` может быть null — эхо request-заголовка, его Cloudflare в этом сценарии не выставлял).
+2. 10/10 `streamGenerateContent` на daily — все 200, ноль 400 location (отдельно на canary и на production после промоута). Это наблюдаемый результат проверки, а не доказательство того, как Google классифицирует IP или что 400 не вернутся позже.
 3. Полный игровой ход: `source=live provider=arem`, 166 слов, без Polza.
+
+**Защита остаётся:** geo-ретраи Levitate на том же daily-хосте не убирались — если 400 вернётся, запрос всё равно добьётся 200 ценой задержки.
 
 **Rollback:** canary `antigravity-canary` (`748ac647`) с тем же проверенным скриптом остаётся в аккаунте — при проблемах переключить `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` на `https://antigravity-canary.<account>.workers.dev/daily-cloudcode-pa.googleapis.com`. Если 400 вернутся — убрать блок `[placement]` и остаться на geo-ретраях или поднять выделенный западный прокси.
 
