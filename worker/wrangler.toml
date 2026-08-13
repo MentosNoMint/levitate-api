@@ -1,11 +1,12 @@
-name = "antigravity"
+name = "antigravity-canary"
 main = "worker.js"
 compatibility_date = "2026-01-22"
 
-# Deploys over the EXISTING production worker, so the workers.dev URL stays
-# https://antigravity.<account>.workers.dev and Levitate's env needs no change.
-# If `wrangler deploy` says the name is taken by another account, do NOT pick
-# a new name silently — that changes the subdomain and Levitate's endpoint.
+# CANARY NAME ON PURPOSE. The production worker
+# antigravity.<account>.workers.dev was deployed manually and its live
+# source/config was never fetched. Deploying wrangler over it blindly can
+# overwrite unknown live behavior. Deploy this canary, verify it end to
+# end, and only then promote (rename or repoint Levitate).
 
 # CANDIDATE — NOT VERIFIED IN PRODUCTION.
 # Worker called from ARN/RU runs in the ARN colo and Google daily-cloudcode-pa
@@ -18,14 +19,15 @@ compatibility_date = "2026-01-22"
 # host probing is experimental and unreliable against replicated/anycast
 # endpoints like googleapis.com.
 #
-# After `npx wrangler deploy`, verify:
-#   1. curl -sS -D- https://antigravity.<account>.workers.dev/trace
+# After `npx wrangler deploy`, verify on the CANARY URL:
+#   1. curl -sS -D- https://antigravity-canary.<account>.workers.dev/trace
 #      — /trace returns eyeball request.cf.*; the cf-placement response
 #      header shows where the Worker actually executed and must not be
 #      "local"/ARN. /cdn-cgi/* is rejected 404, not a placement check.
-#   2. Repeated streamGenerateContent (10x) — no 400 location.
-#   3. One full game turn — source=live provider=arem.
-# Only then update docs to claim the fix works. If 400s persist, remove
+#   2. Repeated streamGenerateContent (10x) via the canary on daily — no 400.
+#   3. One full game turn against the canary endpoint — source=live provider=arem.
+# Only then promote: either `name = "antigravity"` deploy of this verified
+# script, or point Levitate at the canary URL. If 400s persist, remove
 # this block and fall back to geo-retries / a dedicated western proxy.
 [placement]
 region = "gcp:us-east4"

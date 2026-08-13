@@ -28,8 +28,8 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 **Кандидат на устранение флапа (НЕ проверен в проде):** явный `placement.region` в `worker/wrangler.toml` — Worker исполняется возле Google Cloud US, Google видит не-RU egress:
 
 ```toml
-# worker/wrangler.toml
-name = "antigravity"   # деплой поверх существующего воркера — URL в Levitate не меняется
+# worker/wrangler.toml — CANARY. Продакшен-воркер не трогаем, пока canary не проверен.
+name = "antigravity-canary"
 main = "worker.js"
 compatibility_date = "2026-01-22"
 
@@ -37,21 +37,23 @@ compatibility_date = "2026-01-22"
 region = "gcp:us-east4"
 ```
 
-`name = "antigravity"` обязателен: деплой обновляет тот самый `antigravity.<account>.workers.dev`, иначе появится новый subdomain и Levitate придётся переключать endpoint. `placement.hostname` для этого НЕ использовать: host-probing экспериментален и ненадёжен против replicated/anycast-эндпоинтов вроде `googleapis.com`.
+Почему canary: исходник/конфиг живого `antigravity.<account>.workers.dev` никогда не скачивался (нет CF-авторизации), поэтому деплой wrangler поверх него может перетереть неизвестное живое поведение. `placement.hostname` не использовать: host-probing экспериментален и ненадёжен против replicated/anycast-эндпоинтов вроде `googleapis.com`.
 
-Деплой (нужен вход в Cloudflare):
+Деплой canary (нужен вход в Cloudflare):
 
 ```bash
 cd worker
 npx wrangler login   # один раз, откроет браузер Cloudflare
-npx wrangler deploy
+npx wrangler deploy  # имя: antigravity-canary
 ```
 
-Обязательная верификация после деплоя, и только потом можно считать фикс работающим:
+Обязательная верификация canary, и только потом промоут:
 
-1. С VPS: `curl -sS -D- https://antigravity.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`), а заголовок ответа `cf-placement` показывает, где воркер реально исполняется; он должен присутствовать и не быть `local`/ARN. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
-2. 10 подряд `streamGenerateContent` на daily — ни одного 400 location.
-3. Полный игровой ход — `source=live provider=arem`.
+1. С VPS: `curl -sS -D- https://antigravity-canary.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`), а заголовок ответа `cf-placement` показывает, где воркер реально исполняется; он должен присутствовать и не быть `local`/ARN. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
+2. 10 подряд `streamGenerateContent` на daily через canary — ни одного 400 location.
+3. Полный игровой ход против canary-endpoint — `source=live provider=arem`.
+
+Промоут только после зелёной canary-проверки, одним из двух: (а) в `wrangler.toml` сменить `name` на `antigravity` и задеплоить этот же проверенный скрипт; (б) переключить `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` в Levitate на canary URL.
 
 Если 400 сохраняются — убрать блок `[placement]` и остаться на geo-ретраях или поднять выделенный западный прокси.
 
