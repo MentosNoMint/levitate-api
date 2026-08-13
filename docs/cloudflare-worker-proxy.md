@@ -49,7 +49,7 @@ npx wrangler deploy  # имя: antigravity-canary
 
 Обязательная верификация canary, и только потом промоут:
 
-1. С VPS: `curl -sS -D- https://antigravity-canary.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`), а заголовок ответа `cf-placement` показывает, где воркер реально исполняется; он должен присутствовать и не быть `local`/ARN. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
+1. С VPS: `curl -sS https://antigravity-canary.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`) и `cfPlacement` — эхо заголовка `cf-placement`, который Cloudflare добавляет в **запрос** (не в клиентский ответ): `remote-LHR` = исполнение перенесено, `local-ARN` = остался в коло вызывающего. Требуется `remote-*`, не `local-ARN`. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
 2. 10 подряд `streamGenerateContent` на daily через canary — ни одного 400 location.
 3. Полный игровой ход против canary-endpoint — `source=live provider=arem`.
 

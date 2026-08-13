@@ -122,17 +122,24 @@ export default {
         { headers: { "content-type": "text/plain; charset=utf-8" } }
       );
     }
-    // Placement check helper: request.cf.* is the eyeball-facing colo;
-    // the CF-Placement response header on THIS response shows where the
-    // Worker actually executed (Cloudflare injects it when placement
-    // moves execution away from the eyeball colo).
+    // Placement check helper. Cloudflare adds the `cf-placement` header to
+    // the REQUEST when placement is enabled ("remote-LHR" = moved to London
+    // colo, "local-EWR" = ran in the default eyeball colo). The header is
+    // NOT added to the client response automatically, so /trace echoes it
+    // in both the JSON body and a response header.
     if (url.pathname === "/trace") {
-      return Response.json({
+      const cfPlacement = request.headers.get("cf-placement");
+      const payload = {
         eyeballColo: request.cf?.colo ?? null,
         eyeballCountry: request.cf?.country ?? null,
         eyeballRegion: request.cf?.region ?? null,
-        note: "cf-placement response header shows the execution colo",
-      });
+        cfPlacement: cfPlacement,
+      };
+      const headers = { "content-type": "application/json" };
+      if (cfPlacement) {
+        headers["cf-placement"] = cfPlacement;
+      }
+      return new Response(JSON.stringify(payload), { headers });
     }
     // /cdn-cgi/* is Cloudflare control plane, not a proxied Google path.
     // Serving it via parseTarget would forward it upstream and make
