@@ -21,16 +21,17 @@ from app.core.constants import get_credential_access_token_key, get_credential_c
 
 GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "ANTIGRAVITY_CLOUD_CODE_ENDPOINT",
-    "https://cloudcode-pa.googleapis.com",
+    "https://daily-cloudcode-pa.googleapis.com",
 )
 
 
 def _cloud_code_endpoint_fallbacks(primary: str) -> list[str]:
     """Prefer the configured host, then the daily/prod sibling.
 
-    Discriminating probes (same token+payload): cloudcode-pa returns 429
-    RESOURCE_EXHAUSTED from both RU and FRA egress; daily-cloudcode-pa
-    returns 200 from FRA and 400 UNSUPPORTED_LOCATION from RU/ARN.
+    Official desktop generate uses daily-cloudcode-pa (via CF Worker).
+    Same working token+payload: cloudcode-pa returns 429 RESOURCE_EXHAUSTED
+    from FRA and ARN; that is not treated as proven overload. daily returns
+    200 from FRA and intermittent 400 location via Worker colo ARN.
     """
     primary = (primary or "").rstrip("/")
     candidates = [primary]
@@ -60,9 +61,38 @@ def _is_geo_blocked_error(error_text: str) -> bool:
     )
 
 
+def _generate_retry_action(
+    status_code: int,
+    error_text: str,
+    *,
+    has_sibling: bool,
+    geo_retries: int,
+    geo_limit: int = _GEO_LOCATION_RETRY_LIMIT,
+) -> str:
+    """Next action after a non-200 streamGenerateContent response.
+
+    Returns 'geo' (retry same host), 'sibling', or 'fail'.
+
+    Location 400 on worker/daily flaps 200/400 from ARN; switching that to
+    cloudcode-pa yields 429 on the same working token. Retry daily first.
+    429 may try the sibling (daily, if primary was cloudcode-pa).
+    """
+    is_geo = _is_geo_blocked_error(error_text)
+    if is_geo and geo_retries < geo_limit:
+        return "geo"
+    if status_code == 429 and has_sibling:
+        return "sibling"
+    if is_geo and has_sibling:
+        return "sibling"
+    return "fail"
+
+
 def _antigravity_headers(token: str) -> dict:
+    # Match live official language_server User-Agent (2.4.3). Isolation on
+    # worker/daily showed 2.4.3 and 2.35.0 both 200/400 flap; UA is not the
+    # 429 discriminator.
     return {
-        "User-Agent": "antigravity/2.35.0 windows/amd64",
+        "User-Agent": "antigravity/2.4.3 windows/amd64",
         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
         "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         "Authorization": f"Bearer {token}",
@@ -573,10 +603,13 @@ class AntigravityProvider(BaseProvider):
                                 body_text = await response.aread()
                                 error_text = body_text.decode(errors="replace")
                                 current_endpoint = endpoints[endpoint_index]
-                                if endpoint_index + 1 < len(endpoints) and (
-                                    response.status_code == 429
-                                    or _is_geo_blocked_error(error_text)
-                                ):
+                                action = _generate_retry_action(
+                                    response.status_code,
+                                    error_text,
+                                    has_sibling=endpoint_index + 1 < len(endpoints),
+                                    geo_retries=geo_retries,
+                                )
+                                if action == "sibling":
                                     endpoint_index += 1
                                     url = f"{endpoints[endpoint_index]}/v1internal:streamGenerateContent?alt=sse"
                                     logger.warning(
@@ -586,7 +619,7 @@ class AntigravityProvider(BaseProvider):
                                         endpoints[endpoint_index],
                                     )
                                     continue
-                                if _is_geo_blocked_error(error_text) and geo_retries < _GEO_LOCATION_RETRY_LIMIT:
+                                if action == "geo":
                                     geo_retries += 1
                                     logger.warning(
                                         "Antigravity geo/location block via endpoint=%s (attempt %s/%s): %s",

@@ -9,13 +9,13 @@
 
 Cloudflare Worker принимает запросы с вашего сервера и отправляет их к `*.googleapis.com` через egress Cloudflare. Это снижает зависимость от location сервера, но не является постоянной гарантией.
 
-Для текущего production рекомендуется path-style endpoint:
+Для текущего production рекомендуется path-style endpoint официального desktop generate:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
 ```
 
-`/daily-cloudcode-pa.googleapis.com` остаётся поддерживаемой альтернативой allowlist, но сейчас не рекомендуется для production из-за наблюдавшейся intermittent geo-классификации.
+`/cloudcode-pa.googleapis.com` остаётся в allowlist как sibling: тот же рабочий token на generate сейчас отвечает 429 RESOURCE_EXHAUSTED с FRA и ARN. Это не доказанная «перегрузка». Worker/daily с colo ARN флапает 200/400 location — backend ретраит тот же host, не прыгает сразу на cloudcode-pa.
 
 Бэкенд собирает URL как `{ANTIGRAVITY_CLOUD_CODE_ENDPOINT}/v1internal:...`.
 
@@ -37,12 +37,12 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/cloudcode-pa.googleapis.com
  * Antigravity / Cloud Code API reverse proxy (single worker)
  *
  * Client (recommended):
- *   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker>/cloudcode-pa.googleapis.com
+ *   ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker>/daily-cloudcode-pa.googleapis.com
  *
  * Examples:
- *   /cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
- *   /cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse
- *   /daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist (supported alternative)
+ *   /daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse
+ *   /daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
+ *   /cloudcode-pa.googleapis.com/v1internal:loadCodeAssist (sibling; generate currently 429s)
  *   /businessaicode.googleapis.com/v1/...   (optional enterprise)
  */
 
@@ -218,27 +218,27 @@ https://google-api-proxy.<account>.workers.dev
 
 ## Шаг 4. `.env` на сервере
 
-Формат: **base URL воркера + `/cloudcode-pa.googleapis.com` в пути** (path-style host embedding).
+Формат: **base URL воркера + `/daily-cloudcode-pa.googleapis.com` в пути** (path-style host embedding, как у официального desktop).
 
 Рекомендуемый production endpoint:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleapis.com
 ```
 
 Пример:
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.<account>.workers.dev/daily-cloudcode-pa.googleapis.com
 ```
 
 Реальный production-пример (подставьте свой аккаунт/имя):
 
 ```env
-ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.artemkiselev18072k6.workers.dev/cloudcode-pa.googleapis.com
+ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://antigravity.artemkiselev18072k6.workers.dev/daily-cloudcode-pa.googleapis.com
 ```
 
-`/daily-cloudcode-pa.googleapis.com` поддерживается allowlist как альтернативный path, но для текущего production не рекомендуется. Если нужно временно проверить его, замените только значение env и повторите аутентифицированные проверки из шага 5.
+`/cloudcode-pa.googleapis.com` остаётся sibling-fallback после исчерпания geo-ретраев daily. Не ставьте его primary для generate: тот же token отвечает 429.
 
 Перезапуск только бэкенда:
 
@@ -335,14 +335,14 @@ Levitate backend
 | `daily-cloudcode-pa.googleapis.com` | **200 generate** (`gemini-3.6-flash-high`) | **400 FAILED_PRECONDITION** `User location is not supported` |
 | quota APIs (`loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuotaSummary`) | 200, remainingFraction 1.0, `standard-tier` | 200, same |
 
-Вывод: generate на `cloudcode-pa` сейчас мёртв независимо от IP. Generate на `daily-cloudcode-pa` жив, но Google режет RU/ARN. Worker, вызванный с VPS, садится в colo **ARN**; с этой машины — **FRA**. Чтобы daily работал с Levitate на Beget, Worker должен egress-ить из поддерживаемого colo (Smart Placement / западный прокси), иначе путь VPS→ARN→daily снова даст 400.
+Replay официального desktop (credential, который сегодня даёт 200 в UI): тот же token+body 200 на worker/daily и 429 на cloudcode-pa. UA `2.4.3` vs `2.35.0` на worker/daily с VPS оба флапают 200/400 — User-Agent не отделяет 429. Worker с VPS остаётся colo **ARN**; с FRA-машины — **FRA**. ARN worker/daily может 200 без прокси этой машины, если backend ретраит тот же daily host.
 
-Backend после 429/geo на одном host пробует sibling (`cloudcode-pa` ↔ `daily-cloudcode-pa`).
+Backend: location 400 ретраит тот же host; 429 пробует sibling. Не трактовать 429 как доказанную перегрузку.
 
 ### Точная диагностика
 
 1. Сначала выполните **аутентифицированный** запрос на текущем endpoint; используйте `gemini-3.6-flash-high` и проверьте HTTP-статус и тело ответа.
-2. Если появляется `FAILED_PRECONDITION` / `User location is not supported`, замените только `ANTIGRAVITY_CLOUD_CODE_ENDPOINT` на рекомендуемый `/cloudcode-pa.googleapis.com`.
+2. Если появляется `FAILED_PRECONDITION` / `User location is not supported`, оставьте `/daily-cloudcode-pa.googleapis.com` и дайте geo-ретраям тот же host. Не переключайте primary на `/cloudcode-pa.googleapis.com` из-за location: generate там 429 на том же token.
 3. Пересоздайте только backend:
 
    ```bash

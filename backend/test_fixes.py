@@ -100,13 +100,13 @@ class TestErrorClassifier(TestCase):
 
 
 class TestCloudCodeEndpoint(TestCase):
-    def test_source_default_is_production_not_staging(self):
+    def test_source_default_is_official_daily_host(self):
         from pathlib import Path
 
         src = Path(__file__).with_name("app").joinpath("providers", "antigravity.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"https://cloudcode-pa.googleapis.com"', src)
+        self.assertIn('"https://daily-cloudcode-pa.googleapis.com"', src)
 
     def test_fallbacks_include_daily_sibling(self):
         from app.providers.antigravity import _cloud_code_endpoint_fallbacks
@@ -126,6 +126,29 @@ class TestCloudCodeEndpoint(TestCase):
                 daily,
                 "https://worker.example/cloudcode-pa.googleapis.com",
             ],
+        )
+
+    def test_geo_retries_same_host_before_sibling(self):
+        from app.providers.antigravity import _GEO_LOCATION_RETRY_LIMIT, _generate_retry_action
+
+        geo = "User location is not supported for the API"
+        self.assertEqual(
+            _generate_retry_action(400, geo, has_sibling=True, geo_retries=0),
+            "geo",
+        )
+        self.assertEqual(
+            _generate_retry_action(
+                400, geo, has_sibling=True, geo_retries=_GEO_LOCATION_RETRY_LIMIT
+            ),
+            "sibling",
+        )
+        self.assertEqual(
+            _generate_retry_action(429, "RESOURCE_EXHAUSTED", has_sibling=True, geo_retries=0),
+            "sibling",
+        )
+        self.assertEqual(
+            _generate_retry_action(429, "RESOURCE_EXHAUSTED", has_sibling=False, geo_retries=0),
+            "fail",
         )
 
 
