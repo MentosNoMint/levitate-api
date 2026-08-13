@@ -107,7 +107,26 @@ class TestCloudCodeEndpoint(TestCase):
             encoding="utf-8"
         )
         self.assertIn('"https://cloudcode-pa.googleapis.com"', src)
-        self.assertNotIn('"https://daily-cloudcode-pa.googleapis.com"', src)
+
+    def test_fallbacks_include_daily_sibling(self):
+        from app.providers.antigravity import _cloud_code_endpoint_fallbacks
+
+        worker = "https://worker.example/cloudcode-pa.googleapis.com"
+        self.assertEqual(
+            _cloud_code_endpoint_fallbacks(worker),
+            [
+                worker,
+                "https://worker.example/daily-cloudcode-pa.googleapis.com",
+            ],
+        )
+        daily = "https://worker.example/daily-cloudcode-pa.googleapis.com"
+        self.assertEqual(
+            _cloud_code_endpoint_fallbacks(daily),
+            [
+                daily,
+                "https://worker.example/cloudcode-pa.googleapis.com",
+            ],
+        )
 
 
 class TestModelGroups(TestCase):

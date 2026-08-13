@@ -24,6 +24,26 @@ GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "https://cloudcode-pa.googleapis.com",
 )
 
+
+def _cloud_code_endpoint_fallbacks(primary: str) -> list[str]:
+    """Prefer the configured host, then the daily/prod sibling.
+
+    Discriminating probes (same token+payload): cloudcode-pa returns 429
+    RESOURCE_EXHAUSTED from both RU and FRA egress; daily-cloudcode-pa
+    returns 200 from FRA and 400 UNSUPPORTED_LOCATION from RU/ARN.
+    """
+    primary = (primary or "").rstrip("/")
+    candidates = [primary]
+    if "daily-cloudcode-pa" in primary:
+        sibling = primary.replace("daily-cloudcode-pa", "cloudcode-pa", 1)
+    elif "cloudcode-pa" in primary:
+        sibling = primary.replace("cloudcode-pa", "daily-cloudcode-pa", 1)
+    else:
+        sibling = None
+    if sibling and sibling not in candidates:
+        candidates.append(sibling)
+    return candidates
+
 # Cloudflare Worker egress IPs are sometimes geo-classified as blocked by Google
 # even when the worker itself is healthy. Retry a few times before bubbling up.
 _GEO_LOCATION_RETRY_LIMIT = 5
@@ -530,7 +550,9 @@ class AntigravityProvider(BaseProvider):
 
         async def response_generator():
             client_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
-            url = f"{GOOGLE_CLOUD_CODE_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
+            endpoints = _cloud_code_endpoint_fallbacks(GOOGLE_CLOUD_CODE_ENDPOINT)
+            endpoint_index = 0
+            url = f"{endpoints[endpoint_index]}/v1internal:streamGenerateContent?alt=sse"
             # Auth refresh gets one extra attempt; geo/location flaps get several
             # because CF Worker egress IP classification is intermittent.
             max_attempts = 2 + _GEO_LOCATION_RETRY_LIMIT
@@ -550,11 +572,25 @@ class AntigravityProvider(BaseProvider):
                             if response.status_code != 200:
                                 body_text = await response.aread()
                                 error_text = body_text.decode(errors="replace")
+                                current_endpoint = endpoints[endpoint_index]
+                                if endpoint_index + 1 < len(endpoints) and (
+                                    response.status_code == 429
+                                    or _is_geo_blocked_error(error_text)
+                                ):
+                                    endpoint_index += 1
+                                    url = f"{endpoints[endpoint_index]}/v1internal:streamGenerateContent?alt=sse"
+                                    logger.warning(
+                                        "Antigravity HTTP %s via endpoint=%s; trying sibling %s",
+                                        response.status_code,
+                                        current_endpoint,
+                                        endpoints[endpoint_index],
+                                    )
+                                    continue
                                 if _is_geo_blocked_error(error_text) and geo_retries < _GEO_LOCATION_RETRY_LIMIT:
                                     geo_retries += 1
                                     logger.warning(
                                         "Antigravity geo/location block via endpoint=%s (attempt %s/%s): %s",
-                                        GOOGLE_CLOUD_CODE_ENDPOINT,
+                                        current_endpoint,
                                         geo_retries,
                                         _GEO_LOCATION_RETRY_LIMIT,
                                         error_text[:240],
@@ -564,7 +600,7 @@ class AntigravityProvider(BaseProvider):
                                 logger.error(
                                     "Antigravity request failed with HTTP %s via endpoint=%s: %s",
                                     response.status_code,
-                                    GOOGLE_CLOUD_CODE_ENDPOINT,
+                                    current_endpoint,
                                     error_text[:500],
                                 )
                                 raise Exception(f"HTTP {response.status_code}: {error_text}")
