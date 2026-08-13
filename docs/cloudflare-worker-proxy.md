@@ -21,23 +21,25 @@ ANTIGRAVITY_CLOUD_CODE_ENDPOINT=https://<worker-url>/daily-cloudcode-pa.googleap
 
 ---
 
-## Шаг 0. Постоянный западный egress (placement hostname)
+## Шаг 0. Текущее состояние и кандидат на постоянный egress
 
-Без этого Worker, вызванный с Beget VPS, исполняется в colo **ARN** и `streamGenerateContent` на `daily-cloudcode-pa` флапает `200/400 User location is not supported`. Нативная проверка с VPS без локального прокси: `[200, 400, 400, 200, 400]`; geo-ретраи Levitate добирают до 200, но каждый 400 — лишняя задержка.
+**Проверено (2026-08-13):** Worker, вызванный с Beget VPS, исполняется в colo **ARN**, и `streamGenerateContent` на `daily-cloudcode-pa` флапает `200/400 User location is not supported`. Нативная проба с VPS без локальных процессов: `[200, 400, 400, 200, 400]`. Geo-ретраи Levitate на том же daily-хосте добирают до 200: полный игровой ход прошёл с `source=live provider=arem` (158 слов) без прокси/туннелей на локальной машине.
 
-Постоянное решение — размещение Worker рядом с Google, а не с вызывающим. Исходники и конфиг лежат в `worker/`:
+**Кандидат на устранение флапа (НЕ проверен в проде):** явный `placement.region` в `worker/wrangler.toml` — Worker исполняется возле Google Cloud US, Google видит не-RU egress:
 
 ```toml
 # worker/wrangler.toml
-name = "antigravity-cloudcode-proxy"
+name = "antigravity"   # деплой поверх существующего воркера — URL в Levitate не меняется
 main = "worker.js"
 compatibility_date = "2026-01-22"
 
 [placement]
-hostname = "daily-cloudcode-pa.googleapis.com"
+region = "gcp:us-east4"
 ```
 
-Деплой:
+`name = "antigravity"` обязателен: деплой обновляет тот самый `antigravity.<account>.workers.dev`, иначе появится новый subdomain и Levitate придётся переключать endpoint. `placement.hostname` для этого НЕ использовать: host-probing экспериментален и ненадёжен против replicated/anycast-эндпоинтов вроде `googleapis.com`.
+
+Деплой (нужен вход в Cloudflare):
 
 ```bash
 cd worker
@@ -45,9 +47,14 @@ npx wrangler login   # один раз, откроет браузер Cloudflare
 npx wrangler deploy
 ```
 
-После деплоя `https://antigravity.<account>.workers.dev/cdn-cgi/trace` с VPS должен показывать не ARN, а коло возле Google; тогда 400 location с daily исчезает без каких-либо процессов на локальной машине. Levitate менять не нужно — URL тот же.
+Обязательная верификация после деплоя, и только потом можно считать фикс работающим:
 
-## Шаг 1. Создать Worker
+1. С VPS: `curl -sS -D- https://antigravity.<account>.workers.dev/trace` — JSON отдаёт eyeball-colo (`request.cf`), а заголовок ответа `cf-placement` показывает, где воркер реально исполняется; он должен присутствовать и не быть `local`/ARN. `cdn-cgi/trace` для проверки НЕ годится: воркер проксирует всё, кроме `/`, `/health` и `/trace`, поэтому `/cdn-cgi/*` он явно режет 404, а не отдаёт colo.
+2. 10 подряд `streamGenerateContent` на daily — ни одного 400 location.
+3. Полный игровой ход — `source=live provider=arem`.
+
+Если 400 сохраняются — убрать блок `[placement]` и остаться на geo-ретраях или поднять выделенный западный прокси.
+
 ## Шаг 1. Создать Worker
 
 1. Войдите в [Cloudflare Dashboard](https://dash.cloudflare.com/).

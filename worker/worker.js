@@ -122,6 +122,24 @@ export default {
         { headers: { "content-type": "text/plain; charset=utf-8" } }
       );
     }
+    // Placement check helper: request.cf.* is the eyeball-facing colo;
+    // the CF-Placement response header on THIS response shows where the
+    // Worker actually executed (Cloudflare injects it when placement
+    // moves execution away from the eyeball colo).
+    if (url.pathname === "/trace") {
+      return Response.json({
+        eyeballColo: request.cf?.colo ?? null,
+        eyeballCountry: request.cf?.country ?? null,
+        eyeballRegion: request.cf?.region ?? null,
+        note: "cf-placement response header shows the execution colo",
+      });
+    }
+    // /cdn-cgi/* is Cloudflare control plane, not a proxied Google path.
+    // Serving it via parseTarget would forward it upstream and make
+    // /cdn-cgi/trace a misleading "placement check".
+    if (url.pathname.startsWith("/cdn-cgi/")) {
+      return Response.json({ error: "cdn-cgi paths are not proxied" }, { status: 404 });
+    }
 
     const parsed = parseTarget(url);
     if (parsed.error) {
@@ -139,7 +157,6 @@ export default {
           : request.body,
     };
     // streaming POST body support on CF
-    // @ts-ignore
     init.duplex = "half";
 
     let up;
