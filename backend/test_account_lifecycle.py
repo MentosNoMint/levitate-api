@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+os.environ["APP_ENV"] = "development"
+os.environ.setdefault("REDIS_REQUIRED", "false")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_lifecycle.db"
 from app.core.error_classifier import (
     UpstreamErrorKind,
     classify_upstream_error_kind,

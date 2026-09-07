@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 from unittest import IsolatedAsyncioTestCase
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+os.environ["APP_ENV"] = "development"
+os.environ.setdefault("REDIS_REQUIRED", "false")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_affinity.db"
 from app.api.routers.v1.chat import _handle_credential_failure, get_session_id
 from app.core.constants import get_session_binding_key
 from app.core.error_classifier import UpstreamErrorKind
