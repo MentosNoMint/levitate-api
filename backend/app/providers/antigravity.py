@@ -512,6 +512,7 @@ class AntigravityProvider(BaseProvider):
 
         supports_thinking = _model_supports_thinking(mapped_model, model)
         effort_val = str(kwargs.get("reasoning_effort") or "").lower()
+        is_flash_family = "flash" in f"{mapped_model} {model}".lower()
         gen_config = {}
 
         if supports_thinking:
@@ -521,27 +522,45 @@ class AntigravityProvider(BaseProvider):
                     "thinkingBudget": 0,
                 }
             else:
-                thinking_budget = 2048
+                # Effort budget ladders matching omp-antigravity-pro / pi-catalog
+                if is_flash_family:
+                    effort_budgets = {
+                        "minimal": 1000,
+                        "low": 1000,
+                        "medium": 4000,
+                        "high": 10000,
+                        "xhigh": 24576,
+                        "max": 32768,
+                    }
+                    thinking_budget = -1  # Default dynamic thinking for 3.7+ Flash
+                else:
+                    effort_budgets = {
+                        "minimal": 1024,
+                        "low": 4096,
+                        "medium": 8192,
+                        "high": 16384,
+                        "xhigh": 24576,
+                        "max": 32768,
+                    }
+                    thinking_budget = 2048
+
+                if effort_val and effort_val in effort_budgets:
+                    thinking_budget = effort_budgets[effort_val]
+
+                # Explicit client budget overrides (Anthropic / OpenAI / Gemini style)
                 if "thinking" in kwargs:
                     client_thinking = kwargs.get("thinking")
                     if isinstance(client_thinking, dict):
-                        if client_thinking.get("type") == "enabled" or client_thinking.get("type") is True:
+                        if client_thinking.get("type") in ("enabled", True) or "budget_tokens" in client_thinking:
                             thinking_budget = client_thinking.get("budget_tokens") or thinking_budget
                     elif isinstance(client_thinking, bool) and client_thinking:
-                        thinking_budget = thinking_budget or 2048
+                        thinking_budget = 4000 if thinking_budget == -1 else thinking_budget
                 if "thinking_budget" in kwargs:
                     thinking_budget = kwargs.get("thinking_budget") or thinking_budget
-                if effort_val:
-                    if effort_val in ("high", "xhigh", "max"):
-                        thinking_budget = 4096
-                    elif effort_val == "medium":
-                        thinking_budget = 2048
-                    elif effort_val in ("low", "minimal"):
-                        thinking_budget = 1024
 
                 gen_config["thinkingConfig"] = {
                     "includeThoughts": True,
-                    "thinkingBudget": thinking_budget,
+                    "thinkingBudget": int(thinking_budget),
                 }
 
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
