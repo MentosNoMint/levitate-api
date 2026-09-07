@@ -30,9 +30,9 @@ _litellm.acompletion = _stub_acompletion
 _litellm.aembedding = _stub_aembedding
 sys.modules.setdefault("litellm", _litellm)
 
-os.environ.setdefault("APP_ENV", "development")
+os.environ["APP_ENV"] = "development"
 os.environ.setdefault("REDIS_REQUIRED", "false")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_fixes.db")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_fixes.db"
 os.environ.pop("ENCRYPTION_KEY", None)
 
 from app.core.error_classifier import classify_upstream_error
@@ -200,6 +200,50 @@ class TestDynamicAntigravityModels(TestCase):
 
     def test_build_empty_falls_back_default(self):
         self.assertEqual(build_antigravity_models_from_available([]), DEFAULT_ANTIGRAVITY_MODELS)
+
+    def test_map_model_gemini_37_38(self):
+        self.assertEqual(map_model_name("gemini-3.7-flash"), "gemini-3.7-flash")
+        self.assertEqual(map_model_name("gemini-3.8-flash"), "gemini-3.8-flash")
+        self.assertEqual(map_model_name("gemini-3.7"), "gemini-3.7-flash")
+        self.assertEqual(map_model_name("claude-opus-4.6"), "claude-opus-4.6")
+        self.assertEqual(map_model_name("claude-sonnet-4.6"), "claude-sonnet-4.6")
+        self.assertEqual(map_model_name("gpt-oss-120b"), "gpt-oss-120b")
+
+    def test_resolve_upstream_new_models(self):
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.8-flash"), "gemini-3.8-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.7-flash"), "gemini-3.7-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash", effort="high"), "gemini-3.6-flash-high")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash", effort="low"), "gemini-3.6-flash-low")
+        self.assertEqual(resolve_antigravity_upstream_model("claude-opus-4-6"), "claude-opus-4-6-thinking")
+        self.assertEqual(resolve_antigravity_upstream_model("claude-sonnet-4-6"), "claude-sonnet-4-6")
+        self.assertEqual(resolve_antigravity_upstream_model("gpt-oss-120b"), "gpt-oss-120b-medium")
+
+    def test_build_from_available_collapses_37_38(self):
+        available = {
+            "gemini-3.8-flash-tiered",
+            "gemini-3.7-flash-tiered",
+            "gemini-3.6-flash-high",
+            "gemini-3.6-flash-low",
+            "gpt-oss-120b-medium",
+            "claude-opus-4-6-thinking",
+        }
+        built = build_antigravity_models_from_available(available)
+        self.assertIn("gemini-3.8-flash", built)
+        self.assertIn("gemini-3.7-flash", built)
+        self.assertIn("gemini-3.6-flash", built)
+        self.assertIn("gpt-oss-120b", built)
+        self.assertIn("claude-opus-4-6", built)
+
+    def test_selector_matches_logical_and_tiered(self):
+        cred = Credential(
+            models=["gemini-3.8-flash-tiered", "gemini-3.7-flash-tiered", "claude-opus-4-6-thinking"],
+            type="antigravity",
+        )
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash-tiered"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.7-flash"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "claude-opus-4-6"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "claude-opus-4.6"))
 
 
 class TestSchemas(TestCase):

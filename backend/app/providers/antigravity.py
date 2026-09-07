@@ -370,8 +370,8 @@ class AntigravityProvider(BaseProvider):
         except Exception:
             project_id = os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
         from app.core.constants import resolve_antigravity_upstream_model
-        mapped_model = resolve_antigravity_upstream_model(model)
-
+        effort = kwargs.get("reasoning_effort")
+        mapped_model = resolve_antigravity_upstream_model(model, effort=effort)
 
 
         contents = []
@@ -502,45 +502,62 @@ class AntigravityProvider(BaseProvider):
         if system_instruction:
             request_body["systemInstruction"] = system_instruction
 
-        supports_thinking = "thinking" in mapped_model.lower() or "thinking" in model.lower()
-        thinking_budget = None
-        
-        if supports_thinking:
-            thinking_budget = 2048
-            if "thinking" in kwargs:
-                client_thinking = kwargs.get("thinking")
-                if isinstance(client_thinking, dict):
-                    if client_thinking.get("type") == "enabled" or client_thinking.get("type") is True:
-                        thinking_budget = client_thinking.get("budget_tokens") or thinking_budget
-                elif isinstance(client_thinking, bool) and client_thinking:
-                    thinking_budget = thinking_budget or 2048
-            if "thinking_budget" in kwargs:
-                thinking_budget = kwargs.get("thinking_budget") or thinking_budget
-            if "reasoning_effort" in kwargs:
-                effort = kwargs.get("reasoning_effort")
-                if effort == "high":
-                    thinking_budget = 4096
-                elif effort == "medium":
-                    thinking_budget = 2048
-                elif effort == "low":
-                    thinking_budget = 1024
-                    
+        def _model_supports_thinking(mapped_m: str, req_m: str) -> bool:
+            target = f"{mapped_m} {req_m}".lower()
+            if "thinking" in target or "claude" in target or "gpt-oss" in target:
+                return True
+            if "flash" in target or "3.1-pro" in target or "pro-agent" in target or "3-pro" in target:
+                return True
+            return False
+
+        supports_thinking = _model_supports_thinking(mapped_model, model)
+        effort_val = str(kwargs.get("reasoning_effort") or "").lower()
         gen_config = {}
-        if thinking_budget is not None:
-            gen_config["thinkingConfig"] = {
-                "thinkingBudget": thinking_budget
-            }
-        
+
+        if supports_thinking:
+            if effort_val == "off":
+                gen_config["thinkingConfig"] = {
+                    "includeThoughts": False,
+                    "thinkingBudget": 0,
+                }
+            else:
+                thinking_budget = 2048
+                if "thinking" in kwargs:
+                    client_thinking = kwargs.get("thinking")
+                    if isinstance(client_thinking, dict):
+                        if client_thinking.get("type") == "enabled" or client_thinking.get("type") is True:
+                            thinking_budget = client_thinking.get("budget_tokens") or thinking_budget
+                    elif isinstance(client_thinking, bool) and client_thinking:
+                        thinking_budget = thinking_budget or 2048
+                if "thinking_budget" in kwargs:
+                    thinking_budget = kwargs.get("thinking_budget") or thinking_budget
+                if effort_val:
+                    if effort_val in ("high", "xhigh", "max"):
+                        thinking_budget = 4096
+                    elif effort_val == "medium":
+                        thinking_budget = 2048
+                    elif effort_val in ("low", "minimal"):
+                        thinking_budget = 1024
+
+                gen_config["thinkingConfig"] = {
+                    "includeThoughts": True,
+                    "thinkingBudget": thinking_budget,
+                }
+
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
         if max_tokens is not None:
-            # РџРѕ СѓРјРѕР»С‡Р°РЅРёСЋ Р»РёРјРёС‚ РґР»СЏ Р±РѕР»СЊС€РёРЅСЃС‚РІР° РјРѕРґРµР»РµР№ Gemini СЃРѕСЃС‚Р°РІР»СЏРµС‚ 8192.
-            # Р”Р»СЏ РјРѕРґРµР»РµР№ СЃ РїРѕРґРґРµСЂР¶РєРѕР№ РґР»РёРЅРЅРѕРіРѕ РІС‹РІРѕРґР° (flash-agent, thinking) Р»РёРјРёС‚ СЂР°РІРµРЅ 65536.
-            max_limit = 8192
             lower_mapped = mapped_model.lower() if mapped_model else ""
-            if "flash-agent" in lower_mapped or "thinking" in lower_mapped:
+            if "claude" in lower_mapped:
+                max_limit = 64000
+            elif "flash-agent" in lower_mapped or "thinking" in lower_mapped:
                 max_limit = 65536
+            elif re.search(r"gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash", lower_mapped):
+                max_limit = 65536
+            elif "gpt-oss" in lower_mapped:
+                max_limit = 32768
+            else:
+                max_limit = 8192
             gen_config["maxOutputTokens"] = min(int(max_tokens), max_limit)
-            
         temperature = kwargs.get("temperature")
         if temperature is not None:
             gen_config["temperature"] = float(temperature)

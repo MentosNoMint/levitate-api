@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple
@@ -52,14 +53,40 @@ class CredentialSelector:
         # selecting it here only throws the account into degraded (#3)
         if credential.type == "antigravity" and ("embedding" in normalized or normalized.startswith("text-embedding")):
             return False
-        return bool(
-            credential.models
-            and any(
-                isinstance(model, str)
-                and (cls._normalize_model(model) == normalized or model == model_name)
-                for model in credential.models
-            )
-        )
+        if not credential.models:
+            return False
+
+        # 1. Exact or normalized match
+        if any(
+            isinstance(model, str)
+            and (cls._normalize_model(model) == normalized or model == model_name)
+            for model in credential.models
+        ):
+            return True
+
+        # 2. Antigravity alias, upstream, or family root match
+        if credential.type == "antigravity":
+            from app.core.constants import resolve_antigravity_upstream_model, map_model_name
+            mapped = cls._normalize_model(map_model_name(model_name))
+            upstream = cls._normalize_model(resolve_antigravity_upstream_model(model_name))
+            req_root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", normalized)
+            for m in credential.models:
+                if not isinstance(m, str):
+                    continue
+                m_norm = cls._normalize_model(m)
+                if m_norm in (mapped, upstream):
+                    return True
+                m_root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", m_norm)
+                if req_root and m_root == req_root:
+                    return True
+                if req_root in ("claude-opus-4-6", "claude-opus-4.6") and m_root in ("claude-opus-4-6", "claude-opus-4.6"):
+                    return True
+                if req_root in ("claude-sonnet-4-6", "claude-sonnet-4.6") and m_root in ("claude-sonnet-4-6", "claude-sonnet-4.6"):
+                    return True
+                if req_root == "gpt-oss-120b" and m_root == "gpt-oss-120b":
+                    return True
+
+        return False
 
     @classmethod
     def _quota_value(cls, credential: Credential, model_name: str) -> Optional[float]:
@@ -71,6 +98,13 @@ class CredentialSelector:
             except (TypeError, ValueError):
                 pass
         targets = {cls._normalize_model(model_name)} if model_name else set()
+        if credential.type == "antigravity" and model_name:
+            from app.core.constants import resolve_antigravity_upstream_model, map_model_name
+            targets.add(cls._normalize_model(resolve_antigravity_upstream_model(model_name)))
+            targets.add(cls._normalize_model(map_model_name(model_name)))
+            root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", cls._normalize_model(model_name))
+            if root:
+                targets.add(root)
         for key, val in quotas.items():
             if key.startswith("_group:"):
                 continue

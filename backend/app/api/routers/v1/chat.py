@@ -559,14 +559,16 @@ async def list_models(
     db: AsyncSession = Depends(get_db),
     vkey: VirtualKey = Depends(verify_key)
 ):
-    stmt = select(Credential).where(Credential.status == "active", Credential.user_id == vkey.user_id)
+    from app.core.constants import is_public_antigravity_model, resolve_antigravity_upstream_model, map_model_name
+    stmt = select(Credential).where(Credential.status.in_(["active", "cooldown"]), Credential.user_id == vkey.user_id)
     result = await db.execute(stmt)
     creds = result.scalars().all()
     model_names = set()
     for c in creds:
         if c.models:
             for m in c.models:
-                model_names.add(m)
+                if is_public_antigravity_model(m):
+                    model_names.add(m)
     created_time = int(time.time())
     data = [
         {
@@ -586,24 +588,35 @@ async def retrieve_model(
     db: AsyncSession = Depends(get_db),
     vkey: VirtualKey = Depends(verify_key)
 ):
-    stmt = select(Credential).where(Credential.status == "active", Credential.user_id == vkey.user_id)
+    from app.core.constants import is_public_antigravity_model, resolve_antigravity_upstream_model, map_model_name
+    stmt = select(Credential).where(Credential.status.in_(["active", "cooldown"]), Credential.user_id == vkey.user_id)
     result = await db.execute(stmt)
     creds = result.scalars().all()
     model_names = set()
     for c in creds:
         if c.models:
             for m in c.models:
-                model_names.add(m)
-    
+                if is_public_antigravity_model(m):
+                    model_names.add(m)
+
     matched_model = None
     for name in model_names:
         if name.lower() == model.lower():
             matched_model = name
             break
-            
+
+    if not matched_model:
+        # Fallback: check if the model name resolves to an active upstream model
+        resolved = resolve_antigravity_upstream_model(model)
+        mapped = map_model_name(model)
+        for name in model_names:
+            if name.lower() in (resolved.lower(), mapped.lower()):
+                matched_model = model
+                break
+
     if not matched_model:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{model}' not found or inactive"
         )
         
