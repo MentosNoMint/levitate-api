@@ -69,14 +69,14 @@ class CredentialSelector:
             from app.core.constants import resolve_antigravity_upstream_model, map_model_name
             mapped = cls._normalize_model(map_model_name(model_name))
             upstream = cls._normalize_model(resolve_antigravity_upstream_model(model_name))
-            req_root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", normalized)
+            req_root = re.sub(r"-(low|medium|high|tiered|extra-low|minimal|xhigh|max)$", "", normalized)
             for m in credential.models:
                 if not isinstance(m, str):
                     continue
                 m_norm = cls._normalize_model(m)
                 if m_norm in (mapped, upstream):
                     return True
-                m_root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", m_norm)
+                m_root = re.sub(r"-(low|medium|high|tiered|extra-low|minimal|xhigh|max)$", "", m_norm)
                 if req_root and m_root == req_root:
                     return True
                 if req_root in ("claude-opus-4-6", "claude-opus-4.6") and m_root in ("claude-opus-4-6", "claude-opus-4.6"):
@@ -102,7 +102,7 @@ class CredentialSelector:
             from app.core.constants import resolve_antigravity_upstream_model, map_model_name
             targets.add(cls._normalize_model(resolve_antigravity_upstream_model(model_name)))
             targets.add(cls._normalize_model(map_model_name(model_name)))
-            root = re.sub(r"-(low|medium|high|tiered|extra-low)$", "", cls._normalize_model(model_name))
+            root = re.sub(r"-(low|medium|high|tiered|extra-low|minimal|xhigh|max)$", "", cls._normalize_model(model_name))
             if root:
                 targets.add(root)
         for key, val in quotas.items():

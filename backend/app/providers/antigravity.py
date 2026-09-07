@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import os
 import asyncio
 import time
@@ -369,8 +370,12 @@ class AntigravityProvider(BaseProvider):
             project_id = secret_dict.get("project_id") or os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
         except Exception:
             project_id = os.getenv("GOOGLE_USER_PROJECT") or "levitate-api"
-        from app.core.constants import resolve_antigravity_upstream_model
+        from app.core.constants import resolve_antigravity_upstream_model, extract_model_reasoning_effort
         effort = kwargs.get("reasoning_effort")
+        if not effort:
+            effort = extract_model_reasoning_effort(model)
+            if effort:
+                kwargs["reasoning_effort"] = effort
         mapped_model = resolve_antigravity_upstream_model(model, effort=effort)
 
 

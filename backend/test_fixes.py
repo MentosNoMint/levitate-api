@@ -36,7 +36,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_fixes.db"
 os.environ.pop("ENCRYPTION_KEY", None)
 
 from app.core.error_classifier import classify_upstream_error
-from app.core.constants import get_model_quota_group, get_credential_cooldown_key, get_vkey_tokens_key, get_vkey_rpm_key, map_model_name, build_antigravity_models_from_available, resolve_antigravity_upstream_model, DEFAULT_ANTIGRAVITY_MODELS
+from app.core.constants import get_model_quota_group, get_credential_cooldown_key, get_vkey_tokens_key, get_vkey_rpm_key, map_model_name, build_antigravity_models_from_available, resolve_antigravity_upstream_model, extract_model_reasoning_effort, DEFAULT_ANTIGRAVITY_MODELS
 from app.redis_client import FakeRedis, RedisClientProxy, redis_client
 from app.db.models import Base, Credential, User
 from app.db.session import engine, AsyncSessionLocal
@@ -214,9 +214,24 @@ class TestDynamicAntigravityModels(TestCase):
         self.assertEqual(resolve_antigravity_upstream_model("gemini-3.7-flash"), "gemini-3.7-flash-tiered")
         self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash", effort="high"), "gemini-3.6-flash-high")
         self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash", effort="low"), "gemini-3.6-flash-low")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.8-flash-high"), "gemini-3.8-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.8-flash-medium"), "gemini-3.8-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.8-flash-low"), "gemini-3.8-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.7-flash-high"), "gemini-3.7-flash-tiered")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash-low"), "gemini-3.6-flash-low")
+        self.assertEqual(resolve_antigravity_upstream_model("gemini-3.6-flash-high"), "gemini-3.6-flash-high")
         self.assertEqual(resolve_antigravity_upstream_model("claude-opus-4-6"), "claude-opus-4-6-thinking")
         self.assertEqual(resolve_antigravity_upstream_model("claude-sonnet-4-6"), "claude-sonnet-4-6")
         self.assertEqual(resolve_antigravity_upstream_model("gpt-oss-120b"), "gpt-oss-120b-medium")
+
+    def test_extract_model_reasoning_effort(self):
+        self.assertEqual(extract_model_reasoning_effort("gemini-3.8-flash-high"), "high")
+        self.assertEqual(extract_model_reasoning_effort("gemini-3.8-flash-medium"), "medium")
+        self.assertEqual(extract_model_reasoning_effort("gemini-3.8-flash-low"), "low")
+        self.assertEqual(extract_model_reasoning_effort("gemini-3.8-flash-minimal"), "minimal")
+        self.assertEqual(extract_model_reasoning_effort("claude-opus-4-6-high"), "high")
+        self.assertIsNone(extract_model_reasoning_effort("gemini-3.8-flash"))
+        self.assertIsNone(extract_model_reasoning_effort("gemini-3.8-flash-tiered"))
 
     def test_build_from_available_collapses_37_38(self):
         available = {
@@ -229,8 +244,17 @@ class TestDynamicAntigravityModels(TestCase):
         }
         built = build_antigravity_models_from_available(available)
         self.assertIn("gemini-3.8-flash", built)
+        self.assertIn("gemini-3.8-flash-high", built)
+        self.assertIn("gemini-3.8-flash-medium", built)
+        self.assertIn("gemini-3.8-flash-low", built)
         self.assertIn("gemini-3.7-flash", built)
+        self.assertIn("gemini-3.7-flash-high", built)
+        self.assertIn("gemini-3.7-flash-medium", built)
+        self.assertIn("gemini-3.7-flash-low", built)
         self.assertIn("gemini-3.6-flash", built)
+        self.assertIn("gemini-3.6-flash-high", built)
+        self.assertIn("gemini-3.6-flash-medium", built)
+        self.assertIn("gemini-3.6-flash-low", built)
         self.assertIn("gpt-oss-120b", built)
         self.assertIn("claude-opus-4-6", built)
 
@@ -241,10 +265,21 @@ class TestDynamicAntigravityModels(TestCase):
         )
         self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash"))
         self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash-tiered"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash-high"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash-medium"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.8-flash-low"))
         self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.7-flash"))
+        self.assertTrue(CredentialSelector._model_matches(cred, "gemini-3.7-flash-high"))
         self.assertTrue(CredentialSelector._model_matches(cred, "claude-opus-4-6"))
         self.assertTrue(CredentialSelector._model_matches(cred, "claude-opus-4.6"))
 
+        cred_base = Credential(
+            models=["gemini-3.8-flash"],
+            type="antigravity",
+        )
+        self.assertTrue(CredentialSelector._model_matches(cred_base, "gemini-3.8-flash-high"))
+        self.assertTrue(CredentialSelector._model_matches(cred_base, "gemini-3.8-flash-medium"))
+        self.assertTrue(CredentialSelector._model_matches(cred_base, "gemini-3.8-flash-low"))
 
 class TestSchemas(TestCase):
     def test_negative_rpm_rejected(self):
@@ -641,6 +676,76 @@ class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
         self.assertNotIn("requestId", body["request"])
         self.assertEqual(body["request"].get("sessionId"), "stable-session")
 
+
+    async def test_reasoning_effort_suffix_detection(self):
+        from unittest.mock import patch
+        from app.providers.antigravity import AntigravityProvider
+
+        captured = []
+
+        class FakeStreamResp:
+            status_code = 200
+            headers = {}
+
+            async def aread(self):
+                return b""
+
+            async def aiter_lines(self):
+                if False:
+                    yield ""
+                return
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def stream(self, method, url, headers=None, json=None):
+                captured.append(json)
+                return FakeStreamResp()
+
+        cred = types.SimpleNamespace(
+            id=uuid.uuid4(),
+            type="antigravity",
+            encrypted_secret="enc",
+            status="active",
+            models=["gemini-3.8-flash-tiered"],
+        )
+        provider = AntigravityProvider(cred)
+
+        async def fake_token(force_refresh=False):
+            return "token"
+
+        with patch("app.providers.antigravity.decrypt_secret", return_value='{"project_id":"proj"}'), \
+             patch.object(AntigravityProvider, "get_access_token", side_effect=fake_token), \
+             patch("app.providers.antigravity.httpx.AsyncClient", FakeClient):
+            gen = await provider.chat_completion(
+                model="gemini-3.8-flash-high",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                session_id="test-effort-session",
+            )
+            async for _ in gen:
+                pass
+
+        self.assertTrue(captured, "expected antigravity request body to be captured")
+        body = captured[0]
+        req = body["request"]
+        self.assertEqual(body.get("model"), "gemini-3.8-flash-tiered")
+        thinking_cfg = req.get("generationConfig", {}).get("thinkingConfig", {})
+        self.assertTrue(thinking_cfg.get("includeThoughts"))
+        self.assertEqual(thinking_cfg.get("thinkingBudget"), 10000)
 
 if __name__ == "__main__":
     import unittest

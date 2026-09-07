@@ -8,8 +8,17 @@ from typing import Dict, Iterable, List, Set
 DEFAULT_ANTIGRAVITY_MODELS = [
     # Canonical logical IDs
     "gemini-3.8-flash",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
     "gemini-3.7-flash",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
     "gemini-3.6-flash",
+    "gemini-3.6-flash-high",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-low",
     "gemini-3.5-flash",
     "gemini-3.1-pro",
     "gemini-3-flash",
@@ -103,6 +112,16 @@ ANTIGRAVITY_MODEL_ALIASES: Dict[str, str] = {
     "gemini-3-flash-agent": "gemini-3-flash-agent",
     "gemini-pro-agent": "gemini-pro-agent",
     "gpt-oss-120b-medium": "gpt-oss-120b-medium",
+    # Tiered aliases with implicit effort
+    "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-low": "gemini-3.8-flash-tiered",
+    "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
+    "gemini-3.7-flash-medium": "gemini-3.7-flash-tiered",
+    "gemini-3.7-flash-low": "gemini-3.7-flash-tiered",
+    "gemini-3.6-flash-low": "gemini-3.6-flash-low",
+    "gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-high": "gemini-3.6-flash-high",
 }
 
 REDIS_KEY_VKEY_RPM = "gateway:vkey:{vkey_id}:rpm"
@@ -173,6 +192,28 @@ def get_session_binding_lock_key(user_id, session_id: str, model_name: str) -> s
     )
 
 
+MODEL_EFFORT_SUFFIXES: Dict[str, str] = {
+    "-xhigh": "xhigh",
+    "-max": "max",
+    "-high": "high",
+    "-medium": "medium",
+    "-extra-low": "low",
+    "-minimal": "minimal",
+    "-low": "low",
+}
+
+
+def extract_model_reasoning_effort(model_name: str) -> str | None:
+    """Extract implied reasoning effort from a model name suffix if present."""
+    if not model_name or not isinstance(model_name, str):
+        return None
+    lower = model_name.strip().lower()
+    for suffix, effort in MODEL_EFFORT_SUFFIXES.items():
+        if lower.endswith(suffix):
+            return effort
+    return None
+
+
 def resolve_antigravity_upstream_model(model_name: str, effort: str | None = None) -> str:
     """Map a client/public model name and optional reasoning effort to the upstream Antigravity wire ID."""
     if not model_name:
@@ -182,8 +223,12 @@ def resolve_antigravity_upstream_model(model_name: str, effort: str | None = Non
     lower = raw.lower()
     effort_norm = effort.strip().lower() if isinstance(effort, str) and effort.strip() else None
 
-    # Exact alias check when no effort override is specified
+    # If effort was not explicitly passed, infer it from model name suffix
     if not effort_norm:
+        effort_norm = extract_model_reasoning_effort(lower)
+
+    # Exact alias check when no effort override is specified and no effort suffix
+    if not effort and not effort_norm:
         if raw in ANTIGRAVITY_MODEL_ALIASES:
             return ANTIGRAVITY_MODEL_ALIASES[raw]
         if lower in ANTIGRAVITY_MODEL_ALIASES:
@@ -194,26 +239,33 @@ def resolve_antigravity_upstream_model(model_name: str, effort: str | None = Non
     if flash_match:
         rev = flash_match.group(1)
         sub_tier = flash_match.group(2)
-        # If client explicitly asked for a specific wire SKU without effort override, keep it
-        if sub_tier and not effort_norm:
-            return raw
-
         rev_parts = [int(x) for x in rev.split(".") if x.isdigit()]
-        # For Gemini 3.6:
-        if rev_parts == [3, 6]:
-            if effort_norm in ("high", "xhigh", "max"):
+        if not rev_parts or rev_parts >= [3, 6]:
+            # If client explicitly asked for a wire SKU without effort override (e.g. -tiered)
+            if sub_tier and sub_tier.lower() == "tiered" and not effort:
+                return raw
+
+            # For Gemini 3.6:
+            if rev_parts == [3, 6]:
+                if effort_norm in ("high", "xhigh", "max"):
+                    return "gemini-3.6-flash-high"
+                if effort_norm == "medium":
+                    return "gemini-3.6-flash-medium"
+                if effort_norm in ("low", "minimal"):
+                    return "gemini-3.6-flash-low"
                 return "gemini-3.6-flash-high"
-            if effort_norm == "medium":
-                return "gemini-3.6-flash-medium"
-            if effort_norm in ("low", "minimal"):
-                return "gemini-3.6-flash-low"
-            return "gemini-3.6-flash-high"
 
-        # For Gemini 3.7, 3.8 and future revisions (>= 3.7):
-        return f"gemini-{rev}-flash-tiered"
-
+            # For Gemini 3.7, 3.8 and future revisions (>= 3.7):
+            return f"gemini-{rev}-flash-tiered"
     # Static family resolution with effort
-    if lower in ("gemini-3.5-flash", "gemini-3.5-flash-medium", "gemini-3.5-flash-high", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low"):
+    base_lower = lower
+    if effort_norm:
+        for suffix in MODEL_EFFORT_SUFFIXES:
+            if base_lower.endswith(suffix):
+                base_lower = base_lower[:-len(suffix)]
+                break
+
+    if lower in ("gemini-3.5-flash", "gemini-3.5-flash-medium", "gemini-3.5-flash-high", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low") or base_lower in ("gemini-3.5-flash", "gemini-3-flash"):
         if effort_norm in ("high", "xhigh", "max"):
             return "gemini-3-flash-agent"
         if effort_norm == "medium":
@@ -221,13 +273,13 @@ def resolve_antigravity_upstream_model(model_name: str, effort: str | None = Non
         if effort_norm in ("low", "minimal", "off"):
             return "gemini-3.5-flash-extra-low"
 
-    if lower in ("gemini-3.1-pro", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "gemini-pro-agent"):
+    if lower in ("gemini-3.1-pro", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "gemini-pro-agent") or base_lower in ("gemini-3.1-pro", "gemini-pro"):
         if effort_norm in ("high", "xhigh", "max"):
             return "gemini-pro-agent"
         if effort_norm in ("low", "minimal", "off"):
             return "gemini-3.1-pro-low"
 
-    if lower in (
+    if base_lower in (
         "claude-opus-4-6",
         "claude-opus-4.6",
         "claude-opus-4-6-thinking",
@@ -236,7 +288,7 @@ def resolve_antigravity_upstream_model(model_name: str, effort: str | None = Non
     ):
         return "claude-opus-4-6-thinking"
 
-    if lower in (
+    if base_lower in (
         "claude-sonnet-4-6",
         "claude-sonnet-4.6",
         "claude-sonnet-4-6-thinking",
@@ -245,18 +297,17 @@ def resolve_antigravity_upstream_model(model_name: str, effort: str | None = Non
     ):
         return "claude-sonnet-4-6"
 
-    if lower in ("gpt-oss-120b", "gpt-oss-120b-medium"):
+    if base_lower in ("gpt-oss-120b", "gpt-oss-120b-medium"):
         return "gpt-oss-120b-medium"
 
     if raw in ANTIGRAVITY_MODEL_ALIASES:
         return ANTIGRAVITY_MODEL_ALIASES[raw]
 
     for alias, upstream in ANTIGRAVITY_MODEL_ALIASES.items():
-        if alias.lower() == lower:
+        if alias.lower() == lower or alias.lower() == base_lower:
             return upstream
 
     return raw
-
 
 def is_public_antigravity_model(model_id: str) -> bool:
     """Whether an upstream model id should appear in the public picker /v1/models.
@@ -318,7 +369,9 @@ def build_antigravity_models_from_available(available_ids: Iterable[str]) -> Lis
     ):
         logical_flash = f"gemini-{rev}-flash"
         _add(logical_flash)
-
+        _add(f"gemini-{rev}-flash-high")
+        _add(f"gemini-{rev}-flash-medium")
+        _add(f"gemini-{rev}-flash-low")
     # 2. Collapse other known families into canonical logical models
     # gemini-3.5-flash
     g35 = {
