@@ -19,6 +19,7 @@ from app.redis_client import redis_client
 from app.db.session import AsyncSessionLocal
 from app.db.models import Credential
 from app.core.constants import get_credential_access_token_key, get_credential_cooldown_key
+from app.core.error_classifier import is_account_disabled_text
 
 GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "ANTIGRAVITY_CLOUD_CODE_ENDPOINT",
@@ -704,10 +705,19 @@ class AntigravityProvider(BaseProvider):
                     async with httpx.AsyncClient(timeout=client_timeout) as client:
                         async with client.stream("POST", url, headers=headers, json=body) as response:
                             if response.status_code in (401, 403) and not auth_retried:
-                                cache_key = get_credential_access_token_key(self.credential.id)
-                                await redis_client.delete(cache_key)
-                                auth_retried = True
-                                raise httpx.HTTPStatusError("Auth error", request=response.request, response=response)
+                                # Read the body first: it tells a stale token
+                                # from an account Google disabled, and the
+                                # gateway classifies the failure from it.
+                                auth_text = (await response.aread()).decode(errors="replace")
+                                if not is_account_disabled_text(auth_text):
+                                    cache_key = get_credential_access_token_key(self.credential.id)
+                                    await redis_client.delete(cache_key)
+                                    auth_retried = True
+                                    logger.warning(
+                                        "Antigravity HTTP %s; retrying once with a refreshed token",
+                                        response.status_code,
+                                    )
+                                    continue
                             if response.status_code != 200:
                                 body_text = await response.aread()
                                 error_text = body_text.decode(errors="replace")
@@ -933,7 +943,7 @@ class AntigravityProvider(BaseProvider):
                         err_str.startswith("HTTP 401:")
                         or err_str.startswith("HTTP 403:")
                         or err_str.startswith("Auth error")
-                    )
+                    ) and not is_account_disabled_text(err_str)
                     if is_retryable_auth_http and not auth_retried:
                         cache_key = get_credential_access_token_key(self.credential.id)
                         await redis_client.delete(cache_key)

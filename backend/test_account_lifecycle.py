@@ -270,7 +270,69 @@ class TestProviderLifecycle(IsolatedAsyncioTestCase):
             refreshed = await db.get(Credential, self.credential_id)
             self.assertEqual(refreshed.status, "reauth_required")
 
+    async def test_auth_challenge_retries_once_with_a_fresh_token(self):
+        # Regression: the 401 branch set auth_retried before raising, so the
+        # except handler never retried and every 401 surfaced as a failure.
+        provider = AntigravityProvider(self.credential)
+        provider.get_access_token = AsyncMock(side_effect=["stale-token", "fresh-token"])
+        client = SequencedChatClient(
+            [ErrorStreamResponse(401, b'{"error":{"code":401,"status":"UNAUTHENTICATED"}}'), StreamResponse()]
+        )
+        with patch(
+            "app.providers.antigravity.decrypt_secret",
+            return_value=json.dumps({"refresh_token": "refresh", "project_id": "project"}),
+        ), patch("app.providers.antigravity.httpx.AsyncClient", return_value=client):
+            await provider.chat_completion(model="gemini-3.5-flash-low", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(provider.get_access_token.await_args_list[1].kwargs, {"force_refresh": True})
 
+    async def test_account_disabled_for_tos_fails_fast_with_google_text(self):
+        # A ToS-disabled account is not cured by a token refresh: no retry, and
+        # the error carries Google's body so the gateway can classify it.
+        provider = AntigravityProvider(self.credential)
+        provider.get_access_token = AsyncMock(return_value="token")
+        client = SequencedChatClient([ErrorStreamResponse(403, TOS_DISABLED_BODY)])
+        with patch(
+            "app.providers.antigravity.decrypt_secret",
+            return_value=json.dumps({"refresh_token": "refresh", "project_id": "project"}),
+        ), patch("app.providers.antigravity.httpx.AsyncClient", return_value=client):
+            with self.assertRaises(Exception) as caught:
+                await provider.chat_completion(model="gemini-3.5-flash-low", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(client.calls, 1)
+        self.assertIn("Terms of Service", str(caught.exception))
+        self.assertEqual(classify_upstream_error_kind(caught.exception), UpstreamErrorKind.AUTH)
+
+
+TOS_DISABLED_BODY = (
+    b'{"error":{"code":403,"message":"This service has been disabled in this account for violation of '
+    b'Terms of Service. Please submit an appeal to continue using this product.","status":"PERMISSION_DENIED"}}'
+)
+
+
+class ErrorStreamResponse(StreamResponse):
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    async def aread(self):
+        return self._body
+
+
+class SequencedChatClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    def stream(self, *args, **kwargs):
+        response = self.responses[min(self.calls, len(self.responses) - 1)]
+        self.calls += 1
+        return StreamContext(response)
 
 
 class FakeHTTPError(Exception):
@@ -371,6 +433,19 @@ class TestErrorClassification(IsolatedAsyncioTestCase):
 
     def test_permission_403_without_quota_is_client(self):
         err = FakeHTTPError(403, "PERMISSION_DENIED: permission denied for model")
+        self.assertEqual(classify_upstream_error_kind(err), UpstreamErrorKind.CLIENT)
+
+    def test_tos_disabled_account_is_auth(self):
+        err = FakeHTTPError(403, TOS_DISABLED_BODY.decode())
+        self.assertEqual(classify_upstream_error_kind(err), UpstreamErrorKind.AUTH)
+
+    def test_unread_streaming_response_does_not_crash_classifier(self):
+        # Regression: reading .text of a streamed httpx response that was never
+        # read raised ResponseNotRead inside the classifier and turned the
+        # failover into a 500.
+        request = httpx.Request("POST", "https://daily-cloudcode-pa.googleapis.com")
+        response = httpx.Response(403, request=request, stream=httpx.ByteStream(b"forbidden"))
+        err = httpx.HTTPStatusError("Auth error", request=request, response=response)
         self.assertEqual(classify_upstream_error_kind(err), UpstreamErrorKind.CLIENT)
 
 

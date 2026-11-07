@@ -25,10 +25,29 @@ def _status_code(error: Exception) -> int | None:
 def _error_text(error: Exception) -> str:
     parts = [str(error)]
     response = getattr(error, "response", None)
-    response_text = getattr(response, "text", None)
+    try:
+        response_text = getattr(response, "text", None)
+    except Exception:
+        # A streamed httpx response that was never read raises
+        # ResponseNotRead here; classify from the message alone.
+        response_text = None
     if response_text:
         parts.append(str(response_text))
     return " ".join(parts).lower()
+
+
+# Google disabled the account itself (Terms of Service). A token refresh or
+# a retry on the same account never helps; only the owner's appeal does.
+ACCOUNT_DISABLED_MARKERS = (
+    "disabled in this account",
+    "violation of terms of service",
+    "submit an appeal",
+)
+
+
+def is_account_disabled_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in ACCOUNT_DISABLED_MARKERS)
 
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
@@ -53,7 +72,7 @@ def classify_upstream_error_kind(error: Exception) -> UpstreamErrorKind:
         "revoked refresh",
         "unauthorized_client",
     )
-    if _contains_any(text, hard_auth_markers):
+    if _contains_any(text, hard_auth_markers) or is_account_disabled_text(text):
         return UpstreamErrorKind.AUTH
 
     # Explicit personal/project quota only. Standalone resource_exhausted /
