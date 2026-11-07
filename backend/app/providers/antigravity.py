@@ -26,6 +26,13 @@ GOOGLE_CLOUD_CODE_ENDPOINT = os.getenv(
     "https://daily-cloudcode-pa.googleapis.com",
 )
 
+# The client version Google sees. An outdated one gets HTTP 200 with a canned
+# "This version of Antigravity is no longer supported" text instead of an
+# answer (2.4.3 stopped working by 2026-11-07). Keep it at the desktop app's
+# version (Antigravity.exe ProductVersion).
+ANTIGRAVITY_CLIENT_VERSION = os.getenv("ANTIGRAVITY_CLIENT_VERSION", "2.29.1").strip() or "2.29.1"
+_UNSUPPORTED_CLIENT_MARKER = "version of antigravity is no longer supported"
+
 
 def _cloud_code_endpoint_fallbacks(primary: str) -> list[str]:
     """Prefer the configured host, then the daily/prod sibling.
@@ -94,7 +101,7 @@ def _antigravity_headers(token: str) -> dict:
     # worker/daily showed 2.4.3 and 2.35.0 both 200/400 flap; UA is not the
     # 429 discriminator.
     return {
-        "User-Agent": "antigravity/2.4.3 windows/amd64",
+        "User-Agent": f"antigravity/{ANTIGRAVITY_CLIENT_VERSION} windows/amd64",
         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
         "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         "Authorization": f"Bearer {token}",
@@ -767,6 +774,7 @@ class AntigravityProvider(BaseProvider):
                             chat_id = f"chatcmpl-{uuid.uuid4()}"
                             created_time = int(time.time())
                             saw_finish = False
+                            head_text = ""
                             async for line in response.aiter_lines():
                                 if not line:
                                     continue
@@ -814,6 +822,8 @@ class AntigravityProvider(BaseProvider):
                                             else:
 
                                                 text_content += p_text
+                                                if len(head_text) < 400:
+                                                    head_text += p_text
 
                                             if "inlineData" in p:
                                                 mime_type = p["inlineData"].get("mimeType", "image/jpeg")
@@ -942,8 +952,19 @@ class AntigravityProvider(BaseProvider):
                                         usage=usage_obj
                                     )
                             if not saw_finish:
-                                # Google always ends a complete answer with a
-                                # finishReason; without it the text is cut.
+                                if _UNSUPPORTED_CLIENT_MARKER in head_text.lower():
+                                    logger.error(
+                                        "Google rejects Antigravity client %s; set ANTIGRAVITY_CLIENT_VERSION "
+                                        "to the current desktop version",
+                                        ANTIGRAVITY_CLIENT_VERSION,
+                                    )
+                                    raise Exception(
+                                        f"Antigravity client {ANTIGRAVITY_CLIENT_VERSION} is no longer supported "
+                                        "by Google (configuration error: update ANTIGRAVITY_CLIENT_VERSION)"
+                                    )
+                                # Google ends every complete answer with a
+                                # finishReason (and usageMetadata); without
+                                # it the text is cut.
                                 raise Exception(
                                     "Antigravity stream ended early without finishReason (temporarily unavailable)"
                                 )

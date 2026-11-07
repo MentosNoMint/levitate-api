@@ -186,6 +186,20 @@ class TestProviderStream(_Base):
         with self.assertRaisesRegex(Exception, "stream ended early"):
             await self._complete([_Lines(lines)])
 
+    async def test_unsupported_client_text_is_a_configuration_error_not_an_answer(self):
+        # Live 2026-11-07: with User-Agent antigravity/2.4.3 Google answered
+        # every request 200 with this canned text and no finishReason.
+        from app.core.error_classifier import UpstreamErrorKind, classify_upstream_error_kind
+
+        canned = (
+            "This version of Antigravity is no longer supported. Please download and install "
+            "the latest version at https://antigravity.google/download to continue using the agent."
+        )
+        lines = [_sse({"response": {"candidates": [{"content": {"parts": [{"text": canned}]}}]}})]
+        with self.assertRaisesRegex(Exception, "ANTIGRAVITY_CLIENT_VERSION") as caught:
+            await self._complete([_Lines(lines)])
+        self.assertEqual(classify_upstream_error_kind(caught.exception), UpstreamErrorKind.CONFIGURATION)
+
     async def test_error_event_inside_the_stream_is_an_error(self):
         lines = [_sse({"error": {"code": 503, "message": "The service is currently unavailable.", "status": "UNAVAILABLE"}})]
         with self.assertRaisesRegex(Exception, "HTTP 503"):
