@@ -200,10 +200,50 @@ class TestProviderStream(_Base):
             await self._complete([_Lines(lines)])
         self.assertEqual(classify_upstream_error_kind(caught.exception), UpstreamErrorKind.CONFIGURATION)
 
+    async def test_blocked_answer_is_content_filter_not_stop(self):
+        # Live 2026-11-07 14:21:23 UTC: Google ended a blocked answer with
+        # finishReason PROHIBITED_CONTENT; LiteLLM logged "Unmapped
+        # finish_reason" and the client got 200/stop with a cut answer.
+        for reason in ("PROHIBITED_CONTENT", "SAFETY", "BLOCKLIST", "SPII", "RECITATION"):
+            lines = [
+                _sse({"response": {"candidates": [{"content": {"parts": [{"text": "Начало"}]}}]}}),
+                _sse({"response": {"candidates": [{"content": {"parts": []}, "finishReason": reason}]}}),
+            ]
+            response = await self._complete([_Lines(lines)])
+            self.assertEqual(response.choices[0].finish_reason, "content_filter", reason)
+
+    async def test_max_tokens_is_length(self):
+        lines = [_sse({"response": {"candidates": [{"content": {"parts": [{"text": "a"}]}, "finishReason": "MAX_TOKENS"}]}})]
+        response = await self._complete([_Lines(lines)])
+        self.assertEqual(response.choices[0].finish_reason, "length")
+
+    async def test_blocked_prompt_is_content_filter_not_stream_ended_early(self):
+        # A blocked prompt has no candidates, only promptFeedback.blockReason;
+        # it was reported as "stream ended early" and failed over to every
+        # account, then reached the client as a 500.
+        lines = [_sse({"response": {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}})]
+        response = await self._complete([_Lines(lines)])
+        self.assertEqual(response.choices[0].finish_reason, "content_filter")
+        self.assertFalse(response.choices[0].message.content)
+
     async def test_error_event_inside_the_stream_is_an_error(self):
         lines = [_sse({"error": {"code": 503, "message": "The service is currently unavailable.", "status": "UNAVAILABLE"}})]
         with self.assertRaisesRegex(Exception, "HTTP 503"):
             await self._complete([_Lines(lines)])
+
+
+class TestTransientExhaustionStatus(IsolatedAsyncioTestCase):
+    def test_transient_failure_on_every_account_is_503_retryable(self):
+        # Live 2026-11-07: a cut stream on the last account reached the
+        # client as a 500, which says "do not repeat".
+        err = Exception("Antigravity stream ended early without finishReason (temporarily unavailable)")
+        exc = chat_mod._http_exception_from_upstream_failure(err, None, fallback_status=500)
+        self.assertEqual(exc.status_code, 503)
+        self.assertIn("Retry-After", exc.headers)
+
+    def test_unknown_failure_keeps_the_fallback_status(self):
+        exc = chat_mod._http_exception_from_upstream_failure(Exception("weird"), None, fallback_status=500)
+        self.assertEqual(exc.status_code, 500)
 
 
 class TestTokenRefreshWait(_Base):

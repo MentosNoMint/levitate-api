@@ -54,6 +54,31 @@ def _cloud_code_endpoint_fallbacks(primary: str) -> list[str]:
         candidates.append(sibling)
     return candidates
 
+# Gemini finishReason values that mean Google withheld the answer. OpenAI
+# clients know them as "content_filter"; passed through as-is LiteLLM logs
+# "Unmapped finish_reason" and turns them into "stop", so a refusal looked
+# like a normal (cut) answer.
+_GEMINI_BLOCK_FINISH_REASONS = frozenset({
+    "safety",
+    "prohibited_content",
+    "blocklist",
+    "spii",
+    "recitation",
+    "image_safety",
+    "image_prohibited_content",
+    "image_recitation",
+})
+
+
+def _map_gemini_finish_reason(reason: str) -> str:
+    reason = reason.lower()
+    if reason in _GEMINI_BLOCK_FINISH_REASONS:
+        return "content_filter"
+    if reason == "max_tokens":
+        return "length"
+    return reason
+
+
 # Cloudflare Worker egress IPs are sometimes geo-classified as blocked by Google
 # even when the worker itself is healthy. Retry a few times before bubbling up.
 _GEO_LOCATION_RETRY_LIMIT = 5
@@ -892,11 +917,22 @@ class AntigravityProvider(BaseProvider):
                                         if finish_reason:
 
                                             saw_finish = True
-                                            finish_reason = finish_reason.lower()
+                                            if _map_gemini_finish_reason(finish_reason) == "content_filter":
+                                                logger.warning("Antigravity answer blocked by Google: %s", finish_reason)
+                                            finish_reason = _map_gemini_finish_reason(finish_reason)
 
                                         if tool_calls and not finish_reason:
 
                                             finish_reason = "tool_calls"
+
+                                    # A blocked prompt comes without candidates,
+                                    # only promptFeedback.blockReason. It is a
+                                    # refusal, not a cut stream to fail over.
+                                    block_reason = (response_obj.get("promptFeedback") or {}).get("blockReason")
+                                    if block_reason and not finish_reason:
+                                        logger.warning("Antigravity prompt blocked by Google: %s", block_reason)
+                                        saw_finish = True
+                                        finish_reason = "content_filter"
 
                                     usage_meta = response_obj.get("usageMetadata", {})
 

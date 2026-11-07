@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 # Keep Retry-After aligned with the Redis cooldown applied for RATE_LIMIT.
 RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+# Matches the transient cooldown of an account (see _handle_credential_failure).
+TRANSIENT_RETRY_AFTER_SECONDS = 10
 
 
 def _http_exception_from_upstream_failure(
@@ -61,6 +63,14 @@ def _http_exception_from_upstream_failure(
         )
     if isinstance(error, HTTPException):
         return error
+    if resolved == UpstreamErrorKind.TRANSIENT:
+        # Every account failed with a blip (cut stream, 503): the request
+        # itself is fine and may be repeated, which a 500 does not say.
+        return HTTPException(
+            status_code=503,
+            detail=fallback_detail if fallback_detail is not None else str(error),
+            headers={"Retry-After": str(TRANSIENT_RETRY_AFTER_SECONDS)},
+        )
     return HTTPException(
         status_code=fallback_status,
         detail=fallback_detail if fallback_detail is not None else str(error),
@@ -188,7 +198,7 @@ async def _handle_credential_failure(
             # Optional short cooldown only - never exhausted / reauth.
             # Cooldown via ephemeral Redis key; do not overwrite reset_at (#6, N1)
             db_credential.status = "cooldown"
-            await redis_client.set(get_credential_cooldown_key(db_credential.id), "1", ex=10)
+            await redis_client.set(get_credential_cooldown_key(db_credential.id), "1", ex=TRANSIENT_RETRY_AFTER_SECONDS)
         elif kind == UpstreamErrorKind.QUOTA:
             if db_credential.type == "antigravity":
                 await _mark_antigravity_group_exhausted(db_credential, model_name)
