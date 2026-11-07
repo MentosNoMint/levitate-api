@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 from typing import Any, Mapping, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone, timedelta
@@ -40,6 +41,53 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 # Matches the transient cooldown of an account (see _handle_credential_failure).
 TRANSIENT_RETRY_AFTER_SECONDS = 10
+
+# Google sometimes closes the stream of an answer it will not write without
+# any finishReason (live 2026-11-07: crude player text in a game's verdict).
+# One such cut may be a blip; the same request cut on two accounts in a row is
+# its text, not the accounts. It ends as a refusal, and a cut never cools an
+# account down: otherwise one client asking again and again keeps the whole
+# pool in cooldown and every other client gets 503.
+_STREAM_CUT_MARKER = "stream ended early without finishreason"
+STREAM_CUTS_BEFORE_REFUSAL = 2
+
+
+def _is_stream_cut(error: Exception) -> bool:
+    return _STREAM_CUT_MARKER in str(error).lower()
+
+
+def _content_filter_response(model: str, stream: bool) -> Any:
+    """An empty answer with finish_reason content_filter, as for a Google block."""
+    created = int(time.time())
+    chat_id = f"chatcmpl-{uuid.uuid4()}"
+    if stream:
+        chunk = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "content_filter"}],
+        }
+
+        async def events():
+            yield f"data: {json.dumps(chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+    return {
+        "id": chat_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "content_filter",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 def _http_exception_from_upstream_failure(
@@ -281,7 +329,9 @@ async def chat_completions(
     start_time = time.time()
     last_exception = None
     last_kind = None
-    
+    # Consecutive accounts that cut this request's stream (see _is_stream_cut).
+    stream_cuts = 0
+
     MAX_RETRIES = 10
     attempt = 0
     # The session binding keeps a dialogue on one account for its prompt
@@ -432,18 +482,27 @@ async def chat_completions(
             last_exception = e
             kind = classify_upstream_error_kind(e)
             last_kind = kind
+            cut = _is_stream_cut(e)
+            stream_cuts = stream_cuts + 1 if cut else 0
             # Bookkeeping must never stop the failover to the next account.
             try:
                 await CredentialSelector.release(str(cred.id), 0, db)
                 latency_ms = int((time.time() - start_time) * 1000)
                 await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
-                await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
+                if not cut:
+                    await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
             except Exception:
                 logger.exception("Failure bookkeeping failed; continuing failover")
                 try:
                     await db.rollback()
                 except Exception:
                     pass
+            if stream_cuts >= STREAM_CUTS_BEFORE_REFUSAL:
+                logger.warning(
+                    "Antigravity cut the same request on %d accounts: answering content_filter",
+                    stream_cuts,
+                )
+                return _content_filter_response(matched_model, stream)
             exclude_ids.append(str(cred.id))
             if kind in {UpstreamErrorKind.TRANSIENT, UpstreamErrorKind.UNKNOWN}:
                 routing_session_id = None

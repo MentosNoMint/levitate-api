@@ -106,6 +106,46 @@ class TestRouterFailover(_Base):
         self.assertEqual(response.choices[0].message.content, "ok")
         self.assertEqual(calls, ["first", "second"])
 
+    async def test_same_request_cut_on_two_accounts_is_content_filter(self):
+        # Live 2026-11-07 19:44 and 20:00 UTC: Google cut one room's verdict
+        # (crude player text) on every account without a finishReason. Each
+        # cut cooled its account down, the game asked again every 10 s, and
+        # the whole pool stayed in cooldown: other rooms got 503 too. The text
+        # is the cause, not the account: the second cut is a refusal.
+        calls = []
+
+        def provider_for(cred):
+            async def chat_completion(**kwargs):
+                calls.append(cred.name)
+                raise Exception(
+                    "Antigravity stream ended early without finishReason (temporarily unavailable)"
+                )
+
+            return types.SimpleNamespace(chat_completion=chat_completion)
+
+        response = await self._chat(provider_for)
+        self.assertEqual(response["choices"][0]["finish_reason"], "content_filter")
+        self.assertFalse(response["choices"][0]["message"]["content"])
+        self.assertEqual(calls, ["first", "second"])
+        async with AsyncSessionLocal() as db:
+            for cred_id in (self.first.id, self.second.id):
+                cred = await db.get(Credential, cred_id)
+                self.assertEqual(cred.status, "active", cred.name)
+
+    async def test_one_cut_then_an_answer_is_the_answer(self):
+        def provider_for(cred):
+            async def chat_completion(**kwargs):
+                if cred.name == "first":
+                    raise Exception(
+                        "Antigravity stream ended early without finishReason (temporarily unavailable)"
+                    )
+                return _answer("second try")
+
+            return types.SimpleNamespace(chat_completion=chat_completion)
+
+        response = await self._chat(provider_for)
+        self.assertEqual(response.choices[0].message.content, "second try")
+
     async def test_bookkeeping_failure_after_a_success_still_returns_the_answer(self):
         def provider_for(cred):
             return types.SimpleNamespace(chat_completion=AsyncMock(return_value=_answer("kept")))
