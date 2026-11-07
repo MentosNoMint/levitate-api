@@ -620,6 +620,7 @@ class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
                 return b""
 
             async def aiter_lines(self):
+                # An empty stream: only the request body matters here.
                 if False:
                     yield ""
                 return
@@ -665,8 +666,10 @@ class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
                 stream=True,
                 session_id="stable-session",
             )
-            async for _ in gen:
-                pass
+            # The empty fake stream has no finishReason, so it ends as a cut stream.
+            with self.assertRaisesRegex(Exception, "stream ended early"):
+                async for _ in gen:
+                    pass
 
         self.assertTrue(captured, "expected antigravity request body to be captured")
         body = captured[0]
@@ -691,6 +694,7 @@ class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
                 return b""
 
             async def aiter_lines(self):
+                # An empty stream: only the request body matters here.
                 if False:
                     yield ""
                 return
@@ -736,8 +740,10 @@ class TestAntigravityRequestWrapper(IsolatedAsyncioTestCase):
                 stream=True,
                 session_id="test-effort-session",
             )
-            async for _ in gen:
-                pass
+            # The empty fake stream has no finishReason, so it ends as a cut stream.
+            with self.assertRaisesRegex(Exception, "stream ended early"):
+                async for _ in gen:
+                    pass
 
         self.assertTrue(captured, "expected antigravity request body to be captured")
         body = captured[0]

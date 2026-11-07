@@ -274,10 +274,14 @@ async def chat_completions(
     
     MAX_RETRIES = 10
     attempt = 0
+    # The session binding keeps a dialogue on one account for its prompt
+    # cache. After a transient failure of that account the binding stays, and
+    # this one request moves on without it instead of failing.
+    routing_session_id = session_id
     while attempt < MAX_RETRIES:
         attempt += 1
         cred, matched_model = await CredentialSelector.select_and_book(
-            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids, session_id=session_id
+            db, model_name, user_id=vkey.user_id, estimated_tokens=estimated_tokens, exclude_ids=exclude_ids, session_id=routing_session_id
         )
         if not cred:
             if last_exception:
@@ -362,23 +366,32 @@ async def chat_completions(
                 usage = getattr(response, "usage", None)
                 tokens_used = usage.total_tokens if usage else 0
                 latency_ms = int((time.time() - start_time) * 1000)
-                
-                await CredentialSelector.release(str(cred.id), tokens_used, db)
-                
-                if vkey.id and tokens_used > 0:
-                    await usage_service.incr_vkey_monthly_tokens(vkey.id, tokens_used)
-                    
-                await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
-                if session_id:
-                    assistant_message = extract_assistant_message(response)
-                    if assistant_message is not None:
-                        await remember_tip(
-                            list(messages) + [assistant_message],
-                            vkey.user_id,
-                            model_name,
-                            session_id,
-                            cred.id,
-                        )
+
+                # The answer exists: a failure in accounting must not turn
+                # it into a 500.
+                try:
+                    await CredentialSelector.release(str(cred.id), tokens_used, db)
+
+                    if vkey.id and tokens_used > 0:
+                        await usage_service.incr_vkey_monthly_tokens(vkey.id, tokens_used)
+
+                    await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, usage, latency_ms, "success")
+                    if session_id:
+                        assistant_message = extract_assistant_message(response)
+                        if assistant_message is not None:
+                            await remember_tip(
+                                list(messages) + [assistant_message],
+                                vkey.user_id,
+                                model_name,
+                                session_id,
+                                cred.id,
+                            )
+                except Exception:
+                    logger.exception("Usage bookkeeping failed after a successful answer")
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
                 return response
                 
         except Exception as e:
@@ -406,15 +419,24 @@ async def chat_completions(
                     continue
                 raise HTTPException(status_code=500, detail=str(e))
                 
-            await CredentialSelector.release(str(cred.id), 0, db)
-            latency_ms = int((time.time() - start_time) * 1000)
-            await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
-            
             last_exception = e
             kind = classify_upstream_error_kind(e)
             last_kind = kind
-            await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
+            # Bookkeeping must never stop the failover to the next account.
+            try:
+                await CredentialSelector.release(str(cred.id), 0, db)
+                latency_ms = int((time.time() - start_time) * 1000)
+                await usage_service.log_usage_event(db, vkey.id, cred.id, matched_model, None, latency_ms, "failure")
+                await _handle_credential_failure(db, vkey, cred, session_id, matched_model, kind)
+            except Exception:
+                logger.exception("Failure bookkeeping failed; continuing failover")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             exclude_ids.append(str(cred.id))
+            if kind in {UpstreamErrorKind.TRANSIENT, UpstreamErrorKind.UNKNOWN}:
+                routing_session_id = None
             continue
             
     if last_exception:

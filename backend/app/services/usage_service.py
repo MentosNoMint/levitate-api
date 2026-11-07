@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -145,7 +146,8 @@ async def stream_response_generator(
         yield "data: [DONE]\n\n"
     except Exception as exc:
         stream_error = exc
-        yield f"data: {{\"error\": \"{str(exc)}\"}}\n\n"
+        # json.dumps: upstream errors carry Google's JSON body with quotes.
+        yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
     finally:
         total_tokens = total_prompt_tokens + total_completion_tokens
         latency_ms = int((time.time() - start_time) * 1000)

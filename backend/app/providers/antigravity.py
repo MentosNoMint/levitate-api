@@ -229,12 +229,18 @@ class AntigravityProvider(BaseProvider):
         acquired = await redis_client.set(lock_key, lock_token, ex=90, nx=True)
         
         if not acquired:
-            for _ in range(950):
+            wait_deadline = time.monotonic() + 95
+            while not acquired:
                 await asyncio.sleep(0.1)
                 cached_token = await redis_client.get(cache_key)
                 if cached_token:
                     return cached_token
-            raise TimeoutError("Timed out waiting for the token refresh lock")
+                if time.monotonic() >= wait_deadline:
+                    raise TimeoutError("Timed out waiting for the token refresh lock")
+                # The holder finished without leaving a token (its refresh
+                # failed): refresh here instead of waiting out the deadline.
+                if not await redis_client.get(lock_key):
+                    acquired = await redis_client.set(lock_key, lock_token, ex=90, nx=True)
                     
         try:
             secret_data = decrypt_secret(self.credential.encrypted_secret)
@@ -698,6 +704,8 @@ class AntigravityProvider(BaseProvider):
             max_attempts = 2 + _GEO_LOCATION_RETRY_LIMIT
             geo_retries = 0
             auth_retried = False
+            # Once a chunk went out, a retry would repeat text: fail instead.
+            yielded = False
             for attempt in range(max_attempts):
                 try:
                     token = await self.get_access_token(force_refresh=(auth_retried and attempt > 0))
@@ -758,6 +766,7 @@ class AntigravityProvider(BaseProvider):
                                 raise Exception(f"HTTP {response.status_code}: {error_text}")
                             chat_id = f"chatcmpl-{uuid.uuid4()}"
                             created_time = int(time.time())
+                            saw_finish = False
                             async for line in response.aiter_lines():
                                 if not line:
                                     continue
@@ -769,6 +778,12 @@ class AntigravityProvider(BaseProvider):
                                         chunk_json = json.loads(data_str)
                                     except Exception:
                                         continue
+                                    upstream_error = chunk_json.get("error") if isinstance(chunk_json, dict) else None
+                                    if upstream_error:
+                                        # An error sent inside a 200 stream is a
+                                        # failure, not an empty answer.
+                                        code = upstream_error.get("code", 500) if isinstance(upstream_error, dict) else 500
+                                        raise Exception(f"HTTP {code}: {json.dumps(upstream_error, ensure_ascii=False)}")
                                     response_obj = chunk_json.get("response", {})
                                     candidates = response_obj.get("candidates", [])
                                     text_content = ""
@@ -866,6 +881,7 @@ class AntigravityProvider(BaseProvider):
 
                                         if finish_reason:
 
+                                            saw_finish = True
                                             finish_reason = finish_reason.lower()
 
                                         if tool_calls and not finish_reason:
@@ -916,6 +932,7 @@ class AntigravityProvider(BaseProvider):
                                         "delta": delta,
                                         "finish_reason": finish_reason
                                     }
+                                    yielded = True
                                     yield ModelResponseStream(
                                         id=chat_id,
                                         object="chat.completion.chunk",
@@ -924,8 +941,16 @@ class AntigravityProvider(BaseProvider):
                                         choices=[choice],
                                         usage=usage_obj
                                     )
+                            if not saw_finish:
+                                # Google always ends a complete answer with a
+                                # finishReason; without it the text is cut.
+                                raise Exception(
+                                    "Antigravity stream ended early without finishReason (temporarily unavailable)"
+                                )
                             break
                 except httpx.HTTPStatusError as status_err:
+                    if yielded:
+                        raise
                     # One token-cache refresh retry for auth challenges only.
                     # Do not mutate credential status here — chat/usage classify
                     # quota vs rate-limit vs auth vs client errors centrally.
@@ -936,6 +961,8 @@ class AntigravityProvider(BaseProvider):
                         continue
                     raise status_err
                 except Exception as stream_err:
+                    if yielded:
+                        raise
                     err_str = str(stream_err)
                     # Retry once only for the HTTP 401/403 envelopes we raise above.
                     # Broad substring matches like "credentials" must NOT reauth.

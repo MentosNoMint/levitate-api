@@ -66,8 +66,8 @@ class StreamResponse:
     request = httpx.Request("POST", "https://example.test")
 
     async def aiter_lines(self):
-        if False:
-            yield ""
+        # A complete upstream answer always ends with a finishReason.
+        yield 'data: {"response": {"candidates": [{"content": {"parts": []}, "finishReason": "STOP"}]}}'
 
     async def aread(self):
         return b""
